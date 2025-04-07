@@ -237,3 +237,72 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 
     Ok((remaining, vec![msg]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rustfmt::skip]
+    const HAPROXY_HELLO: &[u8] = &[
+        0x00, 0x00, 0x00, 0x4e, // FRAME-LENGTH = 78 bytes
+        0x01,                   // FRAME-TYPE = HAPROXY-HELLO
+        0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+        0x00,                   // STREAM-ID = 0
+        0x00,                   // FRAME-ID = 0
+        // FRAME-PAYLOAD
+        0x12,
+            // "supported-versions"
+            0x73, 0x75, 0x70, 0x70, 0x6f, 0x72, 0x74, 0x65,
+            0x64, 0x2d, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f,
+            0x6e, 0x73,
+        0x08, 0x03, // TYPE=STRING, len = 3
+            0x32, 0x2e, 0x30, // 2.0
+        0x0e,
+            // "max-frame-size"
+            0x6d, 0x61, 0x78, 0x2d, 0x66, 0x72, 0x61, 0x6d,
+            0x65, 0x2d, 0x73, 0x69, 0x7a, 0x65,
+        0x03, // TYPE=UINT32,
+            0xfc, 0xf0, 0x06,
+        0x0c,
+            // "capabilities"
+            0x63, 0x61, 0x70, 0x61, 0x62, 0x69, 0x6c, 0x69,
+            0x74, 0x69, 0x65, 0x73,
+        0x08, 0x00, // TYPE=STRING, null
+        0x0b,
+            // "healthcheck"
+            0x68, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x63, 0x68,
+            0x65, 0x63, 0x6b,
+        0x11, // TYPE=BOOLEAN, true
+    ];
+
+    #[test]
+    fn test_parse_haproxy_hello() {
+        let (_, frame) = parse_frame(HAPROXY_HELLO).expect("Parses correctly");
+        assert_eq!(frame.frame_type(), &FrameType::HaproxyHello);
+        assert!(frame.metadata().flags.is_fin());
+        assert!(!frame.metadata().flags.is_abort());
+        assert_eq!(frame.metadata().stream_id, 0);
+        assert_eq!(frame.metadata().frame_id, 0);
+
+        match frame.payload() {
+            FramePayload::KVList(kv_list) => {
+                let data = kv_list
+                    .get("supported-versions")
+                    .expect("Has supported versions");
+                assert_eq!(data, &TypedData::String("2.0".to_string()));
+
+                let data = kv_list.get("max-frame-size").expect("Has max frame size");
+                assert_eq!(data, &TypedData::UInt32(16380));
+
+                let data = kv_list.get("capabilities").expect("Has capabilities");
+                assert_eq!(data, &TypedData::String("".to_string()));
+
+                let data = kv_list.get("healthcheck").expect("Has healthcheck");
+                assert_eq!(data, &TypedData::Bool(true));
+            }
+            _ => {
+                panic!("Wrong type of payload");
+            }
+        }
+    }
+}
