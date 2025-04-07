@@ -1,4 +1,4 @@
-use crate::varint::decode_varint;
+use crate::varint::{decode_varint, encode_varint};
 use nom::{
     IResult,
     bytes::complete::take,
@@ -6,6 +6,17 @@ use nom::{
     number::complete::be_u8,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
+
+const TYPE_NULL: u8 = 0x00;
+const TYPE_BOOL: u8 = 0x01;
+const TYPE_INT32: u8 = 0x02;
+const TYPE_UINT32: u8 = 0x03;
+const TYPE_INT64: u8 = 0x04;
+const TYPE_UINT64: u8 = 0x05;
+const TYPE_IPV4: u8 = 0x06;
+const TYPE_IPV6: u8 = 0x07;
+const TYPE_STRING: u8 = 0x08;
+const TYPE_BINARY: u8 = 0x09;
 
 /// <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt#L635>
 ///
@@ -47,44 +58,55 @@ pub enum TypedData {
 
 impl TypedData {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.is_empty() {
-            return None;
+        match typed_data(bytes) {
+            Ok((_rest, typed_data)) => Some(typed_data),
+            Err(_) => None,
         }
+    }
 
-        let type_id = bytes[0] >> 4; // First 4 bits are TYPE
-        let flags = bytes[0] & 0x0F; // Last 4 bits are FLAGS
-
-        match type_id {
-            0 => Some(Self::Null),
-            1 => Some(Self::Bool(flags & 1 != 0)), // Bool is stored in FLAGS
-            2 => bytes
-                .get(1..5)
-                .and_then(|b| Some(Self::Int32(i32::from_be_bytes(b.try_into().ok()?)))),
-            3 => bytes
-                .get(1..5)
-                .and_then(|b| Some(Self::UInt32(u32::from_be_bytes(b.try_into().ok()?)))),
-            4 => bytes
-                .get(1..9)
-                .and_then(|b| Some(Self::Int64(i64::from_be_bytes(b.try_into().ok()?)))),
-            5 => bytes
-                .get(1..9)
-                .and_then(|b| Some(Self::UInt64(u64::from_be_bytes(b.try_into().ok()?)))),
-            6 => bytes
-                .get(1..5)
-                .map(|b| Self::IPv4(Ipv4Addr::new(b[0], b[1], b[2], b[3]))),
-            7 => bytes
-                .get(1..17)
-                .and_then(|b| Some(Self::IPv6(Ipv6Addr::from(<[u8; 16]>::try_from(b).ok()?)))),
-            8 | 9 => {
-                let length = bytes.get(1).cloned()? as usize;
-                let data = bytes.get(2..2 + length)?;
-                Some(if type_id == 8 {
-                    Self::String(String::from_utf8_lossy(data).into_owned())
-                } else {
-                    Self::Binary(data.to_vec())
-                })
+    pub fn to_bytes(&self, buf: &mut Vec<u8>) {
+        match self {
+            Self::Null => {
+                buf.push(TYPE_NULL);
             }
-            _ => None,
+            Self::Bool(val) => {
+                let flags = if *val { 0x01 } else { 0x00 } << 4;
+                buf.push(flags | TYPE_BOOL);
+            }
+            Self::Int32(val) => {
+                buf.push(TYPE_INT32);
+                buf.extend(encode_varint(*val as u64));
+            }
+            Self::UInt32(val) => {
+                buf.push(TYPE_UINT32);
+                buf.extend(encode_varint(*val as u64));
+            }
+            Self::Int64(val) => {
+                buf.push(TYPE_INT64);
+                buf.extend(encode_varint(*val as u64));
+            }
+            Self::UInt64(val) => {
+                buf.push(TYPE_UINT64);
+                buf.extend(encode_varint(*val));
+            }
+            Self::IPv4(addr) => {
+                buf.push(TYPE_IPV4);
+                buf.extend_from_slice(&addr.octets());
+            }
+            Self::IPv6(addr) => {
+                buf.push(TYPE_IPV6);
+                buf.extend_from_slice(&addr.octets());
+            }
+            Self::String(val) => {
+                buf.push(TYPE_STRING);
+                buf.extend(encode_varint(val.len() as u64));
+                buf.extend_from_slice(val.as_bytes());
+            }
+            Self::Binary(val) => {
+                buf.push(TYPE_BINARY);
+                buf.extend(encode_varint(val.len() as u64));
+                buf.extend_from_slice(val);
+            }
         }
     }
 }
@@ -104,13 +126,13 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
     let flags = type_and_flags >> 4;
 
     match type_id {
-        0 => Ok((input, TypedData::Null)),
-        1 => Ok((input, TypedData::Bool((flags & 1) != 0))),
-        2 => decode_varint(input).map(|(i, v)| (i, TypedData::Int32(v as i32))),
-        3 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt32(v as u32))),
-        4 => decode_varint(input).map(|(i, v)| (i, TypedData::Int64(v as i64))),
-        5 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt64(v))),
-        6 => {
+        TYPE_NULL => Ok((input, TypedData::Null)),
+        TYPE_BOOL => Ok((input, TypedData::Bool((flags & 1) != 0))),
+        TYPE_INT32 => decode_varint(input).map(|(i, v)| (i, TypedData::Int32(v as i32))),
+        TYPE_UINT32 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt32(v as u32))),
+        TYPE_INT64 => decode_varint(input).map(|(i, v)| (i, TypedData::Int64(v as i64))),
+        TYPE_UINT64 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt64(v))),
+        TYPE_IPV4 => {
             if input.len() < 4 {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
@@ -118,7 +140,7 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
             let addr = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
             Ok((input, TypedData::IPv4(addr)))
         }
-        7 => {
+        TYPE_IPV6 => {
             if input.len() < 16 {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
@@ -126,7 +148,7 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
             let addr = Ipv6Addr::from(<[u8; 16]>::try_from(bytes).unwrap());
             Ok((input, TypedData::IPv6(addr)))
         }
-        8 | 9 => {
+        TYPE_STRING | TYPE_BINARY => {
             let (input, length) = decode_varint(input)?;
 
             if input.len() < length as usize {
@@ -134,7 +156,7 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
             }
 
             let (input, data) = take(length)(input)?;
-            if type_id == 8 {
+            if type_id == TYPE_STRING {
                 let s = String::from_utf8_lossy(data).into_owned();
                 Ok((input, TypedData::String(s)))
             } else {
@@ -153,11 +175,11 @@ mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    #[test]
-    fn test_loop_typed_data() {
-        // Each test case is a tuple:
-        // (description, input bytes, expected TypedData)
-        let test_cases = vec![
+    /// List of test cases for type parsing
+    /// Each test case is a tuple:
+    /// (description, input bytes, expected TypedData)
+    fn test_cases() -> Vec<(&'static str, Vec<u8>, TypedData)> {
+        vec![
             // Type 0: NULL
             ("NULL", vec![0x00], TypedData::Null),
             // Type 1: Boolean (false) - lower nibble is 1, flags=0 yields false.
@@ -225,9 +247,12 @@ mod tests {
                 vec![0x09, 0x03, 0xAA, 0xBB, 0xCC],
                 TypedData::Binary(vec![0xAA, 0xBB, 0xCC]),
             ),
-        ];
+        ]
+    }
 
-        for (desc, input, expected) in test_cases {
+    #[test]
+    fn test_loop_typed_data() {
+        for (desc, input, expected) in test_cases() {
             let (rest, parsed) = typed_data(&input)
                 .unwrap_or_else(|e| panic!("Test case '{}' failed: {:?}", desc, e));
             assert!(
@@ -237,6 +262,15 @@ mod tests {
                 rest
             );
             assert_eq!(parsed, expected, "Test case '{}' failed", desc);
+        }
+    }
+
+    #[test]
+    fn test_to_bytes() {
+        for (desc, input, expected) in test_cases() {
+            let mut buf = Vec::new();
+            expected.to_bytes(&mut buf);
+            assert_eq!(buf, input, "Test case '{}' failed", desc);
         }
     }
 }

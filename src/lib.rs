@@ -145,18 +145,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         buf.extend_from_slice(name.as_bytes());
 
                         // Serialize variable value based on type
-                        match value {
-                            TypedData::String(val) => {
-                                buf.push(0x08); // STRING type
-                                buf.extend(encode_varint(val.len() as u64));
-                                buf.extend_from_slice(val.as_bytes());
-                            }
-                            TypedData::UInt32(val) => {
-                                buf.push(0x03); // UINT32 type
-                                buf.extend(encode_varint(*val as u64));
-                            }
-                            _ => {} // Handle other types if needed
-                        }
+                        value.to_bytes(buf);
                     }
                     Action::UnSetVar { scope, name } => {
                         // Action type: UNSET-VAR (1 byte)
