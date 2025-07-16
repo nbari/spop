@@ -6,6 +6,7 @@ use nom::{
     number::complete::be_u8,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
+use thiserror::Error;
 
 /// <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt#L635>
 ///
@@ -31,6 +32,13 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 ///     10 -> 15  unused/reserved  |  -  |  -
 ///   -----------------------------+-----+----------------------------------
 /// ```
+
+#[derive(Error, Debug)]
+pub enum TypedDataError {
+    #[error("Invalid conversion from TypedData to native type")]
+    InvalidConversion,
+}
+
 const TYPE_NULL: u8 = 0x00;
 const TYPE_BOOL: u8 = 0x01;
 const TYPE_INT32: u8 = 0x02;
@@ -110,6 +118,108 @@ impl TypedData {
         }
     }
 }
+
+// Macro to implement `From<T> for TypedData` and `trait From<Option<T>> for TypedData`
+// for native types.
+// This allows converting native types directly into TypedData variants.
+// For example, `TypedData::from(42u32)` will yield `TypedData::UInt32(42)`
+// so will `42u32.into()`, and `TypedData::from(Some(42u32))` will yield
+// `TypedData::UInt32(42)` while `TypedData::from(None)` will yield `TypedData::Null`.
+// This is useful to easily convert native types to TypedData when sending replies
+// back.
+macro_rules! from_native_trait {
+    ($native_type:ty, $typed_data_variant:ident) => {
+        impl From<$native_type> for TypedData {
+            #[doc = concat!("Converts a [`", stringify!($native_type), "`] into [`TypedData::", stringify!($typed_data_variant), "`]`(value)`.")]
+            fn from(value: $native_type) -> Self {
+                TypedData::$typed_data_variant(value)
+            }
+        }
+
+        impl From<Option<$native_type>> for TypedData {
+            #[doc = concat!("Converts a [Option]<[`", stringify!($native_type), "`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::", stringify!($typed_data_variant), "`]`(value)`.")]
+            fn from(value: Option<$native_type>) -> Self {
+                match value {
+                    None => TypedData::Null,
+                    Some(value) => TypedData::$typed_data_variant(value),
+                }
+            }
+        }
+    };
+}
+
+// Macro to implement `TryFrom<TypedData> for T` and `trait TryFrom<TypedData> for Option<T>`.
+// This allows converting native types directly into TypedData variants.
+// For example, `42u32::try_from(TypedData::UInt32(42))` will yield `Ok(42)`
+// so will `TypedData::UInt32(42).try_into()`.
+macro_rules! try_from_typed_data {
+    ($native_type:ty, $typed_data_variant:ident) => {
+        impl TryFrom<TypedData> for $native_type {
+            type Error = TypedDataError;
+
+            #[doc = concat!("Converts a [`TypedData::", stringify!($typed_data_variant), "`] to a [`", stringify!($native_type), "`] failing if the type conversion is invalid.")]
+            fn try_from(value: TypedData) -> Result<Self, Self::Error> {
+                match value {
+                    TypedData::$typed_data_variant(val) => Ok(val),
+                    _ => Err(TypedDataError::InvalidConversion),
+                }
+            }
+        }
+
+        impl TryFrom<TypedData> for Option<$native_type> {
+            type Error = TypedDataError;
+
+            #[doc = concat!("Converts a [`TypedData`] to an [Option]<[`", stringify!($native_type), "`]> failing if the type conversion is invalid.
+            If the value is [`TypedData::Null`], it returns [`None`].
+            If the value is [`TypedData::", stringify!($typed_data_variant), "`] it returns `Some(", stringify!($native_type), ")`.")]
+            fn try_from(value: TypedData) -> Result<Self, Self::Error> {
+                match value {
+                    TypedData::Null => Ok(None),
+                    TypedData::$typed_data_variant(val) => Ok(Some(val)),
+                    _ => Err(TypedDataError::InvalidConversion),
+                }
+            }
+        }
+    };
+}
+
+from_native_trait!(bool, Bool);
+from_native_trait!(i32, Int32);
+from_native_trait!(u32, UInt32);
+from_native_trait!(i64, Int64);
+from_native_trait!(u64, UInt64);
+from_native_trait!(Ipv4Addr, IPv4);
+from_native_trait!(Ipv6Addr, IPv6);
+from_native_trait!(String, String);
+from_native_trait!(Vec<u8>, Binary);
+
+// Those needs to be implemented manually
+impl From<&str> for TypedData {
+    /// Converts a [`&str`] into [`TypedData::String`]`(value)`.
+    fn from(value: &str) -> Self {
+        TypedData::String(value.to_string())
+    }
+}
+
+impl From<Option<&str>> for TypedData {
+    /// Converts a [Option]<[`&str`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::String`]`(value)`.
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            None => TypedData::Null,
+            Some(value) => TypedData::String(value.to_string()),
+        }
+    }
+}
+
+try_from_typed_data!(bool, Bool);
+try_from_typed_data!(i32, Int32);
+try_from_typed_data!(u32, UInt32);
+try_from_typed_data!(i64, Int64);
+try_from_typed_data!(u64, UInt64);
+try_from_typed_data!(Ipv4Addr, IPv4);
+try_from_typed_data!(Ipv6Addr, IPv6);
+try_from_typed_data!(String, String);
+try_from_typed_data!(Vec<u8>, Binary);
 
 /// Returns the Type ID and Flags from the first byte of the input
 pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
@@ -272,5 +382,100 @@ mod tests {
             expected.to_bytes(&mut buf);
             assert_eq!(buf, input, "Test case '{}' failed", desc);
         }
+    }
+
+    // Test conversion from native types to TypedData
+    #[test]
+    fn test_from_native_types() {
+        assert_eq!(TypedData::from(true), TypedData::Bool(true));
+        assert_eq!(TypedData::from(false), TypedData::Bool(false));
+        assert_eq!(TypedData::from(123i32), TypedData::Int32(123));
+        assert_eq!(TypedData::from(123u32), TypedData::UInt32(123));
+        assert_eq!(TypedData::from(42i64), TypedData::Int64(42));
+        assert_eq!(TypedData::from(42u64), TypedData::UInt64(42));
+        assert_eq!(
+            TypedData::from(Ipv4Addr::new(192, 168, 0, 1)),
+            TypedData::IPv4(Ipv4Addr::new(192, 168, 0, 1))
+        );
+        assert_eq!(
+            TypedData::from(Ipv6Addr::from([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+            ])),
+            TypedData::IPv6(Ipv6Addr::from([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+            ]))
+        );
+        assert_eq!(
+            TypedData::from("hello".to_string()),
+            TypedData::String("hello".to_string())
+        );
+        assert_eq!(
+            TypedData::from(vec![0xAA, 0xBB, 0xCC]),
+            TypedData::Binary(vec![0xAA, 0xBB, 0xCC])
+        );
+
+        // Test conversion from native types to TypedData using Into trait
+        assert_eq!(TypedData::UInt32(42), 42u32.into())
+    }
+
+    // Test conversion from Option<T> to TypedData
+    // This should yield TypedData::Null for None and TypedData::Variant for Some(value
+    #[test]
+    fn test_from_option_native_types() {
+        let test_val: Option<u32> = None;
+        assert_eq!(TypedData::from(test_val), TypedData::Null);
+        assert_eq!(TypedData::from(None::<bool>), TypedData::Null);
+        assert_eq!(TypedData::from(Some(true)), TypedData::Bool(true));
+        assert_eq!(TypedData::from(Some(false)), TypedData::Bool(false));
+        assert_eq!(TypedData::from(Some(123i32)), TypedData::Int32(123));
+        assert_eq!(TypedData::from(Some(123u32)), TypedData::UInt32(123));
+        assert_eq!(TypedData::from(Some(42i64)), TypedData::Int64(42));
+        assert_eq!(TypedData::from(Some(42u64)), TypedData::UInt64(42));
+        assert_eq!(
+            TypedData::from(Some(Ipv4Addr::new(192, 168, 0, 1))),
+            TypedData::IPv4(Ipv4Addr::new(192, 168, 0, 1))
+        );
+        assert_eq!(
+            TypedData::from(Some(Ipv6Addr::from([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+            ]))),
+            TypedData::IPv6(Ipv6Addr::from([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+            ]))
+        );
+        assert_eq!(
+            TypedData::from(Some("hello".to_string())),
+            TypedData::String("hello".to_string())
+        );
+        assert_eq!(
+            TypedData::from(Some(vec![0xAA, 0xBB, 0xCC])),
+            TypedData::Binary(vec![0xAA, 0xBB, 0xCC])
+        );
+
+        // Test conversion from native types to TypedData using Into trait
+        assert_eq!(TypedData::UInt32(42), Some(42u32).into())
+    }
+
+    // test try_from TypedData to native types
+    #[test]
+    fn test_try_from_typed_data() -> Result<(), TypedDataError> {
+        let val = bool::try_from(TypedData::Bool(true))?;
+        assert_eq!(val, true);
+
+        let val: Option<bool> = Option::try_from(TypedData::Null)?;
+        assert_eq!(val, None);
+
+        let val: Option<bool> = Option::try_from(TypedData::Bool(true))?;
+        assert_eq!(val, Some(true));
+
+        let val: Option<i32> = TypedData::Int32(123).try_into()?;
+        assert_eq!(val, Some(123));
+
+        let val: u32 = TypedData::UInt32(123).try_into()?;
+        assert_eq!(val, 123);
+
+        let val: Result<u32, TypedDataError> = TypedData::UInt64(42).try_into();
+        assert_eq!(val.is_err(), true);
+        Ok(())
     }
 }
