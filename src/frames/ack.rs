@@ -35,11 +35,11 @@ impl Ack {
     }
 
     /// Adds a set-var action to the ACK frame
-    pub fn set_var(mut self, scope: VarScope, name: &str, value: TypedData) -> Self {
+    pub fn set_var(mut self, scope: VarScope, name: &str, value: impl Into<TypedData>) -> Self {
         self.actions.push(Action::SetVar {
             scope,
             name: name.to_string(),
-            value,
+            value: value.into(),
         });
         self
     }
