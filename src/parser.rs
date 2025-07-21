@@ -305,4 +305,39 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_parse_haproxy_disconnect() {
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x25, // FRAME-LENGTH = 37
+            0x02, // FRAME-TYPE: HAPROXY-DISCONNECT
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x00, // STREAM-ID = 0
+            0x00, // FRAME-ID = 0
+            0x0b, // key: "status-code"
+            0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x2d, 0x63, 0x6f, 0x64, 0x65,
+            0x03, 0x00, // TYPE-UINT32=0
+            0x07, // key: "message"
+            0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65,
+            0x08, 0x06, // TYPE-STRING, len = 6, "normal"
+            0x6e, 0x6f, 0x72, 0x6d, 0x61, 0x6c
+        ];
+        match parse_frame(frame) {
+            Ok((_, spop_message)) => {
+                assert_eq!(*spop_message.frame_type(), FrameType::HaproxyDisconnect);
+                match  spop_message.payload() {
+                    FramePayload::KVList(messages)  => {
+                        assert_eq!(messages.get("status-code"), Some(&TypedData::UInt32(0)));
+                        assert_eq!(messages.get("message"), Some(&TypedData::String("normal".into())));
+                    },
+                    _ => {
+                        panic!("Expected a KVList payload, but got a different type");
+                    }
+                }
+            }
+            Err(e) => {
+                panic!("Expected a valid HaproxyDisconnect frame, but got an incomplete frame: {e:?}");
+            }
+        }
+    }
 }

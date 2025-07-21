@@ -82,7 +82,7 @@ impl TryFrom<FramePayload> for HaproxyDisconnect {
         // Ensure that the payload is a KVList
         if let FramePayload::KVList(kv_list) = payload {
             let status_code = kv_list
-                .get("max-frame-size")
+                .get("status-code")
                 .and_then(|v| match v {
                     TypedData::UInt32(val) => Some(*val),
                     _ => None,
