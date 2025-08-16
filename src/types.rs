@@ -195,19 +195,16 @@ from_native_trait!(Vec<u8>, Binary);
 
 // Those needs to be implemented manually
 impl From<&str> for TypedData {
-    /// Converts a [`&str`] into [`TypedData::String`]`(value)`.
+    /// Converts a [`&str`] into <code>[TypedData::String](value)</code>.
     fn from(value: &str) -> Self {
-        TypedData::String(value.to_string())
+        Self::String(value.to_string())
     }
 }
 
 impl From<Option<&str>> for TypedData {
-    /// Converts a [Option]<[`&str`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::String`]`(value)`.
+    /// Converts a [Option]<[`&str`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns <code>[TypedData::String](value)</code>.
     fn from(value: Option<&str>) -> Self {
-        match value {
-            None => TypedData::Null,
-            Some(value) => TypedData::String(value.to_string()),
-        }
+        value.map_or(Self::Null, |value| Self::String(value.to_string()))
     }
 }
 
@@ -460,7 +457,7 @@ mod tests {
     #[test]
     fn test_try_from_typed_data() -> Result<(), TypedDataError> {
         let val = bool::try_from(TypedData::Bool(true))?;
-        assert_eq!(val, true);
+        assert!(val);
 
         let val: Option<bool> = Option::try_from(TypedData::Null)?;
         assert_eq!(val, None);
@@ -475,7 +472,7 @@ mod tests {
         assert_eq!(val, 123);
 
         let val: Result<u32, TypedDataError> = TypedData::UInt64(42).try_into();
-        assert_eq!(val.is_err(), true);
+        assert!(val.is_err());
         Ok(())
     }
 }

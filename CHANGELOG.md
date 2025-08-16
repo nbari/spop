@@ -1,8 +1,11 @@
 Changelog
 =========
 
+## 0.10.0
+- types: Add a macro_rules to generate From/TryFrom implementations for TypedData, thanks @chantra
+
 ## 0.9.2
-- Fixed disconnect: look up for "status-code", not "max-frame-size" #4
+- Fixed disconnect: look up for "status-code", not "max-frame-size", thanks @chantra
 
 ## 0.9.1
 - Added tcp example
