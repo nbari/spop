@@ -6,7 +6,6 @@ use spop::{
     actions::VarScope,
     frame::{FramePayload, FrameType},
     frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},
-    types::TypedData,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
@@ -90,25 +89,18 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
             // Respond with Ack frame
             FrameType::Notify => {
                 if let FramePayload::ListOfMessages(messages) = &frame.payload() {
-                    let mut vars = Vec::new();
+                    // Create the Ack frame
+                    let mut ack = Ack::new(frame.metadata().stream_id, frame.metadata().frame_id);
 
                     for message in messages {
                         match message.name.as_str() {
                             "check-client-ip" => {
                                 let random_value: u32 = rand::random_range(0..100);
-                                vars.push((
-                                    VarScope::Session,
-                                    "ip_score",
-                                    TypedData::UInt32(random_value),
-                                ));
+                                ack = ack.set_var(VarScope::Session, "ip_score", random_value);
                             }
 
                             "log-request" => {
-                                vars.push((
-                                    VarScope::Transaction,
-                                    "my_var",
-                                    TypedData::String("tequila".to_string()),
-                                ));
+                                ack = ack.set_var(VarScope::Transaction, "my_var", "tequila");
                             }
 
                             _ => {
@@ -116,12 +108,6 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                             }
                         }
                     }
-
-                    // Create the Ack frame
-                    let ack = vars.into_iter().fold(
-                        Ack::new(frame.metadata().stream_id, frame.metadata().frame_id),
-                        |ack, (scope, name, value)| ack.set_var(scope, name, value),
-                    );
 
                     // Create the response frame
                     println!("Sending Ack: {:#?}", ack.payload());
