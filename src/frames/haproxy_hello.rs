@@ -144,12 +144,12 @@ impl TryFrom<FramePayload> for HaproxyHello {
                             .map(|s| {
                                 let trimmed = s.trim();
                                 let padded = if trimmed.matches('.').count() == 1 {
-                                    format!("{}.0", trimmed)
+                                    format!("{trimmed}.0")
                                 } else {
                                     trimmed.to_string()
                                 };
                                 Version::parse(&padded)
-                                    .map_err(|e| format!("Invalid version '{}': {}", trimmed, e))
+                                    .map_err(|e| format!("Invalid version '{trimmed}': {e}"))
                             })
                             .collect::<Result<Vec<_>, _>>(),
                     ),

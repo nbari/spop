@@ -30,7 +30,7 @@ impl Decoder for SpopCodec {
                 // Return a generic io::Error, including the error message from nom::Err
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("Failed to parse frame: {:?}", e),
+                    format!("Failed to parse frame: {e:?}"),
                 ))
             }
         }
