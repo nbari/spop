@@ -1,6 +1,9 @@
 Changelog
 =========
 
+## 0.9.2
+- Fixed disconnect: look up for "status-code", not "max-frame-size" #4
+
 ## 0.9.1
 - Added tcp example
 
