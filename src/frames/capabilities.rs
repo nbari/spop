@@ -32,7 +32,7 @@ impl FromStr for FrameCapabilities {
         match s.to_lowercase().as_str() {
             "pipelining" => Ok(Self::Pipelining),
             // Add more capabilities as needed
-            _ => Err(format!("Unknown capability: {}", s)),
+            _ => Err(format!("Unknown capability: {s}")),
         }
     }
 }
@@ -43,7 +43,7 @@ impl fmt::Display for FrameCapabilities {
             Self::Pipelining => "pipelining",
             // Add more capabilities here when needed
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
