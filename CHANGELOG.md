@@ -1,6 +1,9 @@
 Changelog
 =========
 
+## 0.10.1
+- parser: Handle incomplete frames, thanks @chantra
+
 ## 0.10.0
 - types: Add a macro_rules to generate From/TryFrom implementations for TypedData, thanks @chantra
 
