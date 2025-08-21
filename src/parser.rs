@@ -217,32 +217,36 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
 /// LIST-OF-MESSAGES : [ <MESSAGE-NAME> <NB-ARGS:1 byte> <KV-LIST> ... ]
 /// MESSAGE-NAME     : <STRING>
 fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
-    let (remaining, message) = parse_string(input)?;
+    let mut remaining = input;
+    let mut messages = vec![];
 
-    let (remaining, nb_args_bytes) = take(1usize)(remaining)?;
+    while !remaining.is_empty() {
+        let (local_remaining, message) = parse_string(remaining)?;
 
-    let nb_args = nb_args_bytes[0] as usize;
+        let (local_remaining, nb_args_bytes) = take(1usize)(local_remaining)?;
 
-    let mut parser = all_consuming(many_m_n(nb_args, nb_args, parse_key_value_pair));
+        let nb_args = nb_args_bytes[0] as usize;
 
-    let (remaining, kv_list) = parser.parse(remaining)?;
+        let mut parser = many_m_n(nb_args, nb_args, parse_key_value_pair);
+        let (local_remaining, kv_list) = parser.parse(local_remaining)?;
+        remaining = local_remaining;
 
-    let mut map = HashMap::new();
+        let mut map = HashMap::new();
 
-    // handle duplicate keys
-    for (key, value) in kv_list {
-        if map.contains_key(&key) {
-            return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
+        // handle duplicate keys
+        for (key, value) in kv_list {
+            if map.contains_key(&key) {
+                return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
+            }
+            map.insert(key, value);
         }
-        map.insert(key, value);
+
+        messages.push(Message {
+            name: message,
+            args: map,
+        });
     }
-
-    let msg = Message {
-        name: message,
-        args: map,
-    };
-
-    Ok((remaining, vec![msg]))
+    Ok((remaining, messages))
 }
 
 #[cfg(test)]
@@ -414,5 +418,116 @@ mod tests {
                 panic!("Expected an incomplete frame error, but got a valid frame");
             }
         }
+    }
+
+    // Test that a NOTIFY frame with no messages is parsed correctly
+    #[test]
+    fn test_parse_notify_no_messages() {
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x07, // FRAME-LENGTH = 8 bytes
+            0x03, // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01, // STREAM-ID = 1
+            0x01, // FRAME-ID = 1
+        ];
+        let (_, spop_message) = parse_frame(frame).expect("Parses correctly");
+        assert_eq!(*spop_message.frame_type(), FrameType::Notify);
+        assert!(spop_message.metadata().flags.is_fin());
+        assert!(!spop_message.metadata().flags.is_abort());
+        assert_eq!(spop_message.metadata().stream_id, 1);
+        assert_eq!(spop_message.metadata().frame_id, 1);
+        match spop_message.payload() {
+            FramePayload::ListOfMessages(messages) => {
+                assert!(messages.is_empty(), "Expected an empty list of messages");
+            }
+            _ => {
+                panic!("Expected a Messages payload, but got a different type");
+            }
+        }
+    }
+
+    // Test that a NOTIFY frame with two messages is parsed correctly
+    #[test]
+    fn test_parse_notify_two_messages() {
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x13, // FRAME-LENGTH = 19 bytes
+            0x03, // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01, // STREAM-ID = 1
+            0x01, // FRAME-ID = 1
+            0x04, // message name: "msg1"
+            0x6d, 0x73, 0x67, 0x31, // "msg1"
+            0x00, // NB-ARGS = 0
+            0x04, // message name: "msg2"
+            0x6d, 0x73, 0x67, 0x32, // "msg2"
+            0x00, // NB-ARGS = 0
+        ];
+        let (_, spop_message) = parse_frame(frame).expect("Parses correctly");
+        assert_eq!(*spop_message.frame_type(), FrameType::Notify);
+        assert!(spop_message.metadata().flags.is_fin());
+        assert!(!spop_message.metadata().flags.is_abort());
+        assert_eq!(spop_message.metadata().stream_id, 1);
+        assert_eq!(spop_message.metadata().frame_id, 1);
+        match spop_message.payload() {
+            FramePayload::ListOfMessages(messages) => {
+                assert_eq!(messages.len(), 2, "Expected two messages");
+            }
+            _ => {
+                panic!("Expected a Messages payload, but got a different type");
+            }
+        }
+    }
+
+    // Test that a NOTIFY frame with a message that is too short fails to parse.
+    #[test]
+    fn test_parse_notify_msg_too_short() {
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x1C, // FRAME-LENGTH = 28 bytes
+            0x03, // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01, // STREAM-ID = 1
+            0x01, // FRAME-ID = 1
+            0x04, // message name: "msg1"
+            0x6d, 0x73, 0x67, 0x31, // "msg1"
+            0x00, // NB-ARGS = 0
+            0x04, // message name: "msg2"
+            0x6d, 0x73, 0x67, 0x32, // "msg2"
+            0x01, // NB-ARGS = 1
+            0x04, // arg name: "arg1"
+            0x61, 0x72, 0x67,
+            0x31, // "arg1"
+                  // The next bytes are missing, so this is an incomplete frame
+                  // 0x08, 0x02, // TYPE=STRING, len = 2
+                  // 0x61, 0x62, // "ab"
+        ];
+
+        let res = parse_frame(frame);
+        assert!(res.is_err(), "Expected an error for incomplete frame");
+    }
+
+    // Test that a NOTIFY frame with a message that is longer than the set
+    // message length, fails to parse.
+    #[test]
+    fn test_parse_notify_msg_too_long() {
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x1C, // FRAME-LENGTH = 28 bytes
+            0x03, // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01, // STREAM-ID = 1
+            0x01, // FRAME-ID = 1
+            0x04, // message name: "msg1"
+            0x6d, 0x73, 0x67, 0x31, // "msg1"
+            0x00, // NB-ARGS = 0
+            0x04, // message name: "msg2"
+            0x6d, 0x73, 0x67, 0x32, // "msg2"
+            0x01, // NB-ARGS = 1
+            0x04, // arg name: "arg1"
+            0x61, 0x72, 0x67, 0x31, // "arg1"
+            // Argument is too long by 2 bytes compared to frame-length
+            0x08, 0x04, // TYPE=STRING, len = 4
+            0x61, 0x62, 0x63, 0x64, // "abcd"
+        ];
+        let res = parse_frame(frame);
+        assert!(res.is_err(), "Expected an error for incomplete frame");
     }
 }
