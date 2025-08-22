@@ -1,6 +1,9 @@
 Changelog
 =========
 
+## 0.10.2
+- NOTIFY: Handle empty or multiple messages in a list, thanks @chantra
+
 ## 0.10.1
 - parser: Handle incomplete frames, thanks @chantra
 
