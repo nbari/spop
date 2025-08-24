@@ -120,6 +120,12 @@ pub trait SpopFrame: std::fmt::Debug + Send {
     }
 }
 
+impl<'a, T: SpopFrame + Sized + 'a> From<T> for Box<dyn SpopFrame + 'a> {
+    fn from(value: T) -> Box<dyn SpopFrame + 'a> {
+        Box::new(value)
+    }
+}
+
 /// Helper function to encode the payload.
 /// It supports ListOfActions and KVList payloads.
 fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<()> {
