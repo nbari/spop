@@ -1,8 +1,7 @@
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
-use semver::Version;
 use spop::{
-    SpopCodec, SpopFrame,
+    SpopCodec, SpopFrame, Version,
     actions::VarScope,
     frame::{FramePayload, FrameType},
     frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},

@@ -24,6 +24,8 @@ pub use self::varint::{decode_varint, encode_varint};
 pub mod codec;
 pub use self::codec::SpopCodec;
 
+pub use semver::Version;
+
 /// core trait for the SPOP frame
 ///
 /// <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt#L673>
