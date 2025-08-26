@@ -121,7 +121,7 @@ pub trait SpopFrame: std::fmt::Debug + Send {
 }
 
 impl<'a, T: SpopFrame + Sized + 'a> From<T> for Box<dyn SpopFrame + 'a> {
-    fn from(value: T) -> Box<dyn SpopFrame + 'a> {
+    fn from(value: T) -> Self {
         Box::new(value)
     }
 }
