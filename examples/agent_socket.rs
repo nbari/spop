@@ -74,7 +74,7 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
 
                 println!("Sending AgentHello: {:#?}", agent_hello.payload());
 
-                match socket.send(Box::new(agent_hello)).await {
+                match socket.send(agent_hello.into()).await {
                     Ok(_) => println!("Frame sent successfully"),
                     Err(e) => eprintln!("Failed to send frame: {:?}", e),
                 }
@@ -97,7 +97,7 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
 
                 println!("Sending AgentDisconnect: {:#?}", agent_disconnect.payload());
 
-                socket.send(Box::new(agent_disconnect)).await?;
+                socket.send(agent_disconnect.into()).await?;
                 socket.close().await?;
 
                 return Ok(());
@@ -128,7 +128,7 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
 
                     // Create the response frame
                     println!("Sending Ack: {:#?}", ack.payload());
-                    socket.send(Box::new(ack)).await?;
+                    socket.send(ack.into()).await?;
                 }
             }
 

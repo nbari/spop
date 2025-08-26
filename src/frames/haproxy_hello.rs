@@ -211,6 +211,8 @@ impl TryFrom<FramePayload> for HaproxyHello {
 mod tests {
     use super::*;
     use semver::Version;
+    use std::any::Any;
+    use std::any::TypeId;
 
     #[test]
     fn test_haproxy_hello_frame() {
@@ -242,6 +244,9 @@ mod tests {
         );
         assert_eq!(frame.payload.healthcheck, Some(true));
         assert_eq!(frame.payload.engine_id, Some("engine-123".to_string()));
+
+        let boxed: Box<HaproxyHelloFrame> = frame.into();
+        assert_eq!(boxed.type_id(), TypeId::of::<Box<HaproxyHelloFrame>>());
     }
 
     #[test]
