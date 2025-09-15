@@ -66,6 +66,18 @@ impl FrameType {
             Self::Ack => 103,
         }
     }
+
+    /// Converts FrameType to its str representation
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::HaproxyHello => "HAPROXY-HELLO",
+            Self::HaproxyDisconnect => "HAPROXY-DISCONNECT",
+            Self::Notify => "NOTIFY",
+            Self::AgentHello => "AGENT-HELLO",
+            Self::AgentDisconnect => "AGENT-DISCONNECT",
+            Self::Ack => "ACK",
+        }
+    }
 }
 
 ///  metadata contanis flags, on 4 bytes and a two variable-length integer representing the
@@ -222,6 +234,11 @@ mod tests {
         assert_eq!(FrameType::AgentHello.to_u8(), 101);
         assert_eq!(FrameType::AgentDisconnect.to_u8(), 102);
         assert_eq!(FrameType::Ack.to_u8(), 103);
+    }
+
+    #[test]
+    fn test_frame_type_as_str() {
+        assert_eq!(FrameType::HaproxyHello.as_str(), "HAPROXY-HELLO");
     }
 
     #[test]
