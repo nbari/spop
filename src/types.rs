@@ -65,6 +65,7 @@ pub enum TypedData {
 }
 
 impl TypedData {
+    #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         match typed_data(bytes) {
             Ok((_rest, typed_data)) => Some(typed_data),
@@ -72,13 +73,14 @@ impl TypedData {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn to_bytes(&self, buf: &mut Vec<u8>) {
         match self {
             Self::Null => {
                 buf.push(TYPE_NULL);
             }
             Self::Bool(val) => {
-                let flags = if *val { 0x01 } else { 0x00 } << 4;
+                let flags = u8::from(*val) << 4;
                 buf.push(flags | TYPE_BOOL);
             }
             Self::Int32(val) => {
@@ -87,7 +89,7 @@ impl TypedData {
             }
             Self::UInt32(val) => {
                 buf.push(TYPE_UINT32);
-                buf.extend(encode_varint(*val as u64));
+                buf.extend(encode_varint(u64::from(*val)));
             }
             Self::Int64(val) => {
                 buf.push(TYPE_INT64);
@@ -137,7 +139,7 @@ macro_rules! from_native_trait {
         }
 
         impl From<Option<$native_type>> for TypedData {
-            #[doc = concat!("Converts a [Option]<[`", stringify!($native_type), "`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::", stringify!($typed_data_variant), "`]`(value)`.")]
+            #[doc = concat!("Converts a [Option]<[`", stringify!($native_type), "`]> into `TypedData`. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::", stringify!($typed_data_variant), "`]`(value)`.")]
             fn from(value: Option<$native_type>) -> Self {
                 match value {
                     None => TypedData::Null,
@@ -195,14 +197,14 @@ from_native_trait!(Vec<u8>, Binary);
 
 // Those needs to be implemented manually
 impl From<&str> for TypedData {
-    /// Converts a [`&str`] into <code>[TypedData::String](value)</code>.
+    /// Converts a [`&str`] into [`TypedData::String`].
     fn from(value: &str) -> Self {
         Self::String(value.to_string())
     }
 }
 
 impl From<Option<&str>> for TypedData {
-    /// Converts a [Option]<[`&str`]> into TypedData. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns <code>[TypedData::String](value)</code>.
+    /// Converts a [Option]<[`&str`]> into `TypedData`. If the value is None, it returns [`TypedData::Null`]. If the value is `Some(value)`, it returns [`TypedData::String`].
     fn from(value: Option<&str>) -> Self {
         value.map_or(Self::Null, |value| Self::String(value.to_string()))
     }
@@ -219,6 +221,11 @@ try_from_typed_data!(String, String);
 try_from_typed_data!(Vec<u8>, Binary);
 
 /// Returns the Type ID and Flags from the first byte of the input
+///
+/// # Errors
+///
+/// Returns an error if the input is empty, incomplete, or contains an unsupported type.
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::indexing_slicing)]
 pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
     if input.is_empty() {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
@@ -252,12 +259,15 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
             let (input, bytes) = take(16usize)(input)?;
-            let addr = Ipv6Addr::from(<[u8; 16]>::try_from(bytes).unwrap());
+            let addr = <[u8; 16]>::try_from(bytes)
+                .map(Ipv6Addr::from)
+                .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
             Ok((input, TypedData::IPv6(addr)))
         }
         TYPE_STRING | TYPE_BINARY => {
             let (input, length) = decode_varint(input)?;
 
+            #[allow(clippy::cast_possible_truncation)]
             if input.len() < length as usize {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
@@ -278,13 +288,14 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::uninlined_format_args)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     /// List of test cases for type parsing
     /// Each test case is a tuple:
-    /// (description, input bytes, expected TypedData)
+    /// (description, input bytes, expected `TypedData`)
     fn test_cases() -> Vec<(&'static str, Vec<u8>, TypedData)> {
         vec![
             // Type 0: NULL
@@ -412,7 +423,7 @@ mod tests {
         );
 
         // Test conversion from native types to TypedData using Into trait
-        assert_eq!(TypedData::UInt32(42), 42u32.into())
+        assert_eq!(TypedData::UInt32(42), 42u32.into());
     }
 
     // Test conversion from Option<T> to TypedData
@@ -450,7 +461,7 @@ mod tests {
         );
 
         // Test conversion from native types to TypedData using Into trait
-        assert_eq!(TypedData::UInt32(42), Some(42u32).into())
+        assert_eq!(TypedData::UInt32(42), Some(42u32).into());
     }
 
     // test try_from TypedData to native types

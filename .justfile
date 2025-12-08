@@ -3,6 +3,9 @@ IMAGE_NAME := "haproxy-spoe"
 CONTAINER_NAME := "haproxy"
 SOCKET_DIR := "${PWD}/spoa_agent"
 
+default: cargo-test
+  @just --list
+
 # Run HAProxy container with port 5000 exposed
 run: build prepare
     podman run -d --name {{CONTAINER_NAME}} --network=host -v {{SOCKET_DIR}}:/var/run/haproxy {{IMAGE_NAME}}
@@ -40,7 +43,7 @@ shell:
     podman exec -it {{CONTAINER_NAME}} bash
 
 clippy: fmt cargo-test
-  cargo clippy --all -- -W clippy::all -W clippy::nursery -D warnings
+  cargo clippy --all-targets --all-features
 
 fmt:
   cargo fmt --all -- --check
@@ -54,3 +57,6 @@ agent_socket:
 
 agent_tcp:
   cargo watch --ignore spoa_agent/ -x 'run --example agent_tcp'
+
+coverage:
+  cargo llvm-cov --all-features --workspace

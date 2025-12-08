@@ -1,4 +1,4 @@
-//! # SPOP Library for parsing HAProxy SPOP (Stream Processing Offload Protocol)
+//! # SPOP Library for parsing `HAProxy` SPOP (Stream Processing Offload Protocol)
 //!
 //! <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt>
 //!
@@ -99,6 +99,10 @@ pub trait SpopFrame: std::fmt::Debug + Send {
     fn metadata(&self) -> Metadata;
     fn payload(&self) -> FramePayload;
 
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails or if the payload type is unsupported.
+    #[allow(clippy::cast_possible_truncation)]
     fn serialize(&self) -> std::io::Result<Vec<u8>> {
         let mut serialized = Vec::new();
 
@@ -127,7 +131,8 @@ impl<'a, T: SpopFrame + Sized + 'a> From<T> for Box<dyn SpopFrame + 'a> {
 }
 
 /// Helper function to encode the payload.
-/// It supports ListOfActions and KVList payloads.
+/// It supports `ListOfActions` and `KVList` payloads.
+#[allow(clippy::cast_possible_truncation)]
 fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<()> {
     match payload {
         FramePayload::ListOfActions(actions) => {
@@ -195,7 +200,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         // UINT32: <3><VALUE:varint>
                         buf.push(0x03);
                         // use encode_varint for the length of the value
-                        buf.extend(encode_varint(*val as u64));
+                        buf.extend(encode_varint(u64::from(*val)));
                     }
 
                     _ => {}
@@ -203,7 +208,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
             }
         }
 
-        _ => {
+        FramePayload::ListOfMessages(_) => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Unsupported frame payload type",

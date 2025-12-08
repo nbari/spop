@@ -43,6 +43,9 @@ pub enum FrameType {
 }
 
 impl FrameType {
+    /// # Errors
+    ///
+    /// Returns an error if the value doesn't correspond to a valid frame type.
     pub const fn from_u8(value: u8) -> Result<Self, ErrorKind> {
         match value {
             1 => Ok(Self::HaproxyHello),
@@ -55,7 +58,8 @@ impl FrameType {
         }
     }
 
-    /// Converts FrameType to its corresponding u8 value
+    /// Converts `FrameType` to its corresponding u8 value
+    #[must_use]
     pub const fn to_u8(&self) -> u8 {
         match self {
             Self::HaproxyHello => 1,
@@ -67,7 +71,8 @@ impl FrameType {
         }
     }
 
-    /// Converts FrameType to its str representation
+    /// Converts `FrameType` to its str representation
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::HaproxyHello => "HAPROXY-HELLO",
@@ -94,6 +99,7 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
         let mut serialized = Vec::new();
         // Serialize flags (4 bytes)
@@ -169,49 +175,58 @@ pub struct Message {
 pub struct FrameFlags(u32);
 
 impl FrameFlags {
+    #[must_use]
     pub const fn new(is_fin: bool, is_abort: bool) -> Self {
         let mut flags = 0u32;
 
         if is_fin {
-            flags |= 0x00000001;
+            flags |= 0x0000_0001;
         }
 
         if is_abort {
-            flags |= 0x00000002;
+            flags |= 0x0000_0002;
         }
 
         Self(flags)
     }
 
+    #[must_use]
     pub const fn is_fin(&self) -> bool {
-        self.0 & 0x00000001u32 != 0
+        self.0 & 0x0000_0001_u32 != 0
     }
 
+    #[must_use]
     pub const fn is_abort(&self) -> bool {
-        self.0 & 0x00000002u32 != 0
+        self.0 & 0x0000_0002_u32 != 0
     }
 
-    /// Parses FrameFlags from a 4-byte network order field
+    /// Parses `FrameFlags` from a 4-byte network order field
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the flags are invalid according to the SPOP protocol.
     pub const fn from_u32(value: u32) -> Result<Self, ErrorKind> {
         // Ensure FIN is always set (per protocol spec)
-        if value & 0x00000001 == 0 {
+        if value & 0x0000_0001 == 0 {
             return Err(ErrorKind::Verify); // Equivalent to "validation failed"
         }
 
         // Ensure only valid bits are set (optional strict check)
-        if value & 0xFFFFFFFC != 0 {
+        if value & 0xFFFF_FFFC != 0 {
             return Err(ErrorKind::Alt); // Invalid reserved bits used
         }
 
         Ok(Self(value))
     }
 
+    #[must_use]
     pub const fn to_be_bytes(&self) -> [u8; 4] {
         self.0.to_be_bytes()
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unreadable_literal)]
 mod tests {
     use super::*;
 

@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
 
     loop {
         let (stream, addr) = listener.accept().await?;
-        println!("New connection from {}", addr);
+        println!("New connection from {addr}");
         tokio::spawn(handle_connection(stream));
     }
 }
@@ -28,7 +28,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
         let frame = match result {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Frame read error: {:?}", e);
+                eprintln!("Frame read error: {e:?}");
                 break;
             }
         };
@@ -57,8 +57,8 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                 println!("Sending AgentHello: {:#?}", agent_hello.payload());
 
                 match socket.send(Box::new(agent_hello)).await {
-                    Ok(_) => println!("Frame sent successfully"),
-                    Err(e) => eprintln!("Failed to send frame: {:?}", e),
+                    Ok(()) => println!("Frame sent successfully"),
+                    Err(e) => eprintln!("Failed to send frame: {e:?}"),
                 }
 
                 // If "healthcheck" item was set to TRUE in the HAPROXY-HELLO frame, the

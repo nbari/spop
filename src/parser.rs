@@ -18,6 +18,11 @@ use nom::{
 use std::collections::HashMap;
 
 /// Parse a frame from the input byte slice
+///
+/// # Errors
+///
+/// Returns an error if the input is incomplete, malformed, or contains an unsupported frame type.
+#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
 pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
     // Exchange between HAProxy and agents are made using FRAME packets. All frames must be
     // prefixed with their size encoded on 4 bytes in network byte order:
@@ -198,6 +203,7 @@ fn parse_key_value_pair(input: &[u8]) -> IResult<&[u8], (String, TypedData)> {
 }
 
 /// Parse a length-prefixed string
+#[allow(clippy::cast_possible_truncation)]
 fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
     let (input, length) = decode_varint(input)?;
 
@@ -216,6 +222,7 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
 ///
 /// LIST-OF-MESSAGES : [ <MESSAGE-NAME> <NB-ARGS:1 byte> <KV-LIST> ... ]
 /// MESSAGE-NAME     : <STRING>
+#[allow(clippy::indexing_slicing)]
 fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
     let mut remaining = input;
     let mut messages = vec![];
@@ -250,6 +257,7 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -306,7 +314,7 @@ mod tests {
                 assert_eq!(data, &TypedData::UInt32(16380));
 
                 let data = kv_list.get("capabilities").expect("Has capabilities");
-                assert_eq!(data, &TypedData::String("".to_string()));
+                assert_eq!(data, &TypedData::String(String::new()));
 
                 let data = kv_list.get("healthcheck").expect("Has healthcheck");
                 assert_eq!(data, &TypedData::Bool(true));

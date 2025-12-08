@@ -1,6 +1,6 @@
 [package]
 name = "spop"
-version = "0.10.5"
+version = "0.10.6"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Library for parsing HAProxy SPOP (Stream Processing Offload Protocol)"
 documentation = "https://docs.rs/spop/latest/spop/"
@@ -10,6 +10,35 @@ keywords = ["haproxy", "spop", "spoe"]
 categories = ["network-programming"]
 license = "BSD-3-Clause"
 edition = "2024"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+# Allow unstable/opinionated lints (lower priority so individual lints can override)
+nursery = { level = "allow", priority = -1 }
+
+# Enforce pedantic lints
+pedantic = "deny"
+
+# Core lint groups
+all = "deny"
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+complexity = "deny"
+
+# Safety-critical lints
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+await_holding_lock = "deny"
+
+# Performance + memory reliability
+needless_borrow = "deny"
+needless_collect = "deny"
+large_stack_arrays = "deny"
 
 [dependencies]
 anyhow = "1"

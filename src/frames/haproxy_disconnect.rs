@@ -38,6 +38,7 @@ pub struct HaproxyDisconnect {
 }
 
 impl HaproxyDisconnect {
+    #[must_use]
     pub fn to_kv_list(&self) -> HashMap<String, TypedData> {
         let mut map = HashMap::new();
 

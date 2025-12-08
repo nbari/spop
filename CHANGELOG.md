@@ -1,6 +1,13 @@
 Changelog
 =========
 
+## 0.10.6 - 2025-12-08
+
+### Fixed
+- Fixed all clippy warnings (146+ issues) with strict lints enabled
+- Fixed rustdoc broken intra-doc links
+- Replaced `unwrap()` with proper error handling in production code
+
 ## 0.10.2
 - NOTIFY: Handle empty or multiple messages in a list, thanks @chantra
 

@@ -78,7 +78,8 @@ pub enum VarScope {
 }
 
 impl VarScope {
-    /// Converts FrameType to its corresponding u8 value
+    /// Converts `FrameType` to its corresponding u8 value
+    #[must_use]
     pub const fn to_u8(&self) -> u8 {
         match self {
             Self::Process => 0,

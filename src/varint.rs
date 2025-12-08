@@ -14,6 +14,8 @@ use nom::{IResult, number::complete::be_u8};
 ///  ...
 ///
 /// ```
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
 pub fn encode_varint(i: u64) -> Vec<u8> {
     let mut buf = Vec::new();
 
@@ -35,21 +37,25 @@ pub fn encode_varint(i: u64) -> Vec<u8> {
 }
 
 /// Decodes a variable-length integer (varint) from the input byte slice.
+///
+/// # Errors
+///
+/// Returns an error if the input is incomplete or malformed.
 pub fn decode_varint(input: &[u8]) -> IResult<&[u8], u64> {
     let (mut input, first_byte) = be_u8(input)?;
 
     if first_byte < 240 {
-        return Ok((input, first_byte as u64));
+        return Ok((input, u64::from(first_byte)));
     }
 
-    let mut value = first_byte as u64;
+    let mut value = u64::from(first_byte);
     let mut shift = 4;
 
     loop {
         let (new_input, next_byte) = be_u8(input)?;
         input = new_input;
 
-        value += (next_byte as u64) << shift;
+        value += u64::from(next_byte) << shift;
         shift += 7;
 
         if next_byte < 128 {
@@ -61,6 +67,7 @@ pub fn decode_varint(input: &[u8]) -> IResult<&[u8], u64> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::unreadable_literal)]
 mod tests {
     use super::*;
 
@@ -101,11 +108,11 @@ mod tests {
     fn test_varint_1_byte() {
         // 1-byte encoding: 0 <= X < 240
         let data = [0x10]; // 16 in decimal
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 16);
 
         let data = [0xEF]; // 239 in decimal (max 1-byte)
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 239);
 
         assert_eq!(decode_varint(&[239]), Ok((&[][..], 239))); // 1 byte test.
@@ -115,19 +122,19 @@ mod tests {
     fn test_varint_2_bytes() {
         // 2-byte encoding: 240 <= X < 2288
         let data = [0xF0, 0x00]; // 240
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 240);
 
         let data = [0xF1, 0x00]; // 241
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 241);
 
         let data = [0xFC, 0x03]; // 243
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 300);
 
         let data = [0xFF, 0x7F]; // 2287 (max 2-byte)
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 2287);
 
         assert_eq!(decode_varint(&[250, 0]), Ok((&[][..], 250))); // 2 bytes test.
@@ -140,15 +147,15 @@ mod tests {
         assert_eq!(decode_varint(&[240, 128, 0]), Ok((&[][..], 2288)));
 
         let data = [0xF0, 0x80, 0x00]; // 2288
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 2288);
 
         let data = [0xF4, 0x88, 0x00]; // 2420
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 2420);
 
         let data = [0xFF, 0xFF, 0x7F]; // 264431 (max 3-byte)
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 264431);
 
         assert_eq!(decode_varint(&[244, 136, 0]), Ok((&[][..], 2420))); // 3 bytes test.
@@ -159,15 +166,15 @@ mod tests {
     fn test_varint_4_bytes() {
         // 4-byte encoding: 264432 <= X < 33818864
         let data = [0xF0, 0x80, 0x80, 0x00]; // 264432
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 264432);
 
         let data = [0xF0, 0xF4, 0xFE, 0x04]; // Random middle value
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 1572912);
 
         let data = [0xFF, 0xFF, 0xFF, 0x7F]; // 33818863 (max 4-byte)
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 33818863);
     }
 
@@ -175,15 +182,15 @@ mod tests {
     fn test_varint_5_bytes() {
         // 5-byte encoding: 33818864 <= X < 4328786160
         let data = [0xF0, 0x80, 0x80, 0x80, 0x00]; // 33818864
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 33818864);
 
         let data = [0xF0, 0xDC, 0xAC, 0xB0, 0x07]; // Random middle value
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 281374384);
 
         let data = [0xFF, 0xFF, 0xFF, 0xFF, 0x7F]; // 4328786159 (max 5-byte)
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 4328786159);
     }
 
@@ -191,15 +198,15 @@ mod tests {
     fn test_varint_6_bytes() {
         // 6-byte encoding: 4328786160 <= X
         let data = [0xF0, 0x80, 0x80, 0x80, 0x80, 0x00]; // 4328786160
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 4328786160);
 
         let data = [0xF1, 0x80, 0x80, 0x80, 0x80, 0x00]; // 4328786161
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 4328786161);
 
         let data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F];
-        let (_, value) = decode_varint(&data).unwrap();
+        let (_, value) = decode_varint(&data).expect("Failed to decode varint");
         assert_eq!(value, 554084600047);
     }
 
@@ -222,7 +229,7 @@ mod tests {
             let encoded = encode_varint(value);
 
             // Decode the encoded value
-            let (remaining_input, decoded) = decode_varint(&encoded).unwrap();
+            let (remaining_input, decoded) = decode_varint(&encoded).expect("Failed to decode varint");
 
             // Assert that the decoded value matches the original
             assert_eq!(value, decoded);
@@ -240,8 +247,8 @@ mod tests {
         // Test encoding and decoding a large number of values
         for i in 0..300000 {
             let encoded = encode_varint(i);
-            let (remaining_input, decoded) = decode_varint(&encoded).unwrap();
-            assert_eq!(i, decoded, "Failed for value: {}", i);
+            let (remaining_input, decoded) = decode_varint(&encoded).expect("Failed to decode varint");
+            assert_eq!(i, decoded, "Failed for value: {i}");
             assert!(remaining_input.is_empty());
         }
     }

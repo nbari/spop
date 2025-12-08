@@ -67,6 +67,7 @@ pub struct HaproxyHello {
 }
 
 impl HaproxyHello {
+    #[must_use]
     pub fn to_kv_list(&self) -> HashMap<String, TypedData> {
         let mut map = HashMap::new();
 
@@ -90,7 +91,7 @@ impl HaproxyHello {
         let caps_string = self
             .capabilities
             .iter()
-            .map(|c| c.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
         map.insert("capabilities".into(), TypedData::String(caps_string));
@@ -170,7 +171,7 @@ impl TryFrom<FramePayload> for HaproxyHello {
                 .and_then(|v| match v {
                     TypedData::String(v) => Some(
                         v.split(',')
-                            .map(|s| s.trim())
+                            .map(str::trim)
                             .filter_map(|s| FrameCapabilities::from_str(s).ok())
                             .collect::<Vec<FrameCapabilities>>(),
                     ),
@@ -208,6 +209,7 @@ impl TryFrom<FramePayload> for HaproxyHello {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use semver::Version;

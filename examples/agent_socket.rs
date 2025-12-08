@@ -24,16 +24,16 @@ async fn main() -> Result<()> {
     // Set permissions to 777 (testing purposes)
     let perms = std::fs::Permissions::from_mode(0o777);
     std::fs::set_permissions(socket_path, perms)?;
-    println!("SPOE Agent listening on UNIX socket at {}", socket_path);
+    println!("SPOE Agent listening on UNIX socket at {socket_path}");
 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                println!("New UNIX connection from {:?}", stream);
+                println!("New UNIX connection from {stream:?}");
                 tokio::spawn(handle_connection(stream));
             }
             Err(e) => {
-                eprintln!("Failed to accept connection: {:?}", e);
+                eprintln!("Failed to accept connection: {e:?}");
             }
         }
     }
@@ -46,7 +46,7 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
         let frame = match result {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Frame read error: {:?}", e);
+                eprintln!("Frame read error: {e:?}");
                 break;
             }
         };
@@ -75,8 +75,8 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
                 println!("Sending AgentHello: {:#?}", agent_hello.payload());
 
                 match socket.send(agent_hello.into()).await {
-                    Ok(_) => println!("Frame sent successfully"),
-                    Err(e) => eprintln!("Failed to send frame: {:?}", e),
+                    Ok(()) => println!("Frame sent successfully"),
+                    Err(e) => eprintln!("Failed to send frame: {e:?}"),
                 }
 
                 // If "healthcheck" item was set to TRUE in the HAPROXY-HELLO frame, the

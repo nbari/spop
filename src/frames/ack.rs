@@ -26,6 +26,7 @@ pub struct Ack {
 
 impl Ack {
     /// Creates a new ACK frame with no actions
+    #[must_use]
     pub const fn new(stream_id: u64, frame_id: u64) -> Self {
         Self {
             stream_id,
@@ -35,6 +36,7 @@ impl Ack {
     }
 
     /// Adds a set-var action to the ACK frame
+    #[must_use]
     pub fn set_var(mut self, scope: VarScope, name: &str, value: impl Into<TypedData>) -> Self {
         self.actions.push(Action::SetVar {
             scope,
@@ -45,6 +47,7 @@ impl Ack {
     }
 
     // Adds an unset-var action to the ACK frame
+    #[must_use]
     pub fn unset_var(mut self, scope: VarScope, name: &str) -> Self {
         self.actions.push(Action::UnSetVar {
             scope,
