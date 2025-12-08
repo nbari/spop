@@ -229,7 +229,8 @@ mod tests {
             let encoded = encode_varint(value);
 
             // Decode the encoded value
-            let (remaining_input, decoded) = decode_varint(&encoded).expect("Failed to decode varint");
+            let (remaining_input, decoded) =
+                decode_varint(&encoded).expect("Failed to decode varint");
 
             // Assert that the decoded value matches the original
             assert_eq!(value, decoded);
@@ -247,7 +248,8 @@ mod tests {
         // Test encoding and decoding a large number of values
         for i in 0..300000 {
             let encoded = encode_varint(i);
-            let (remaining_input, decoded) = decode_varint(&encoded).expect("Failed to decode varint");
+            let (remaining_input, decoded) =
+                decode_varint(&encoded).expect("Failed to decode varint");
             assert_eq!(i, decoded, "Failed for value: {i}");
             assert!(remaining_input.is_empty());
         }

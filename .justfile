@@ -3,7 +3,7 @@ IMAGE_NAME := "haproxy-spoe"
 CONTAINER_NAME := "haproxy"
 SOCKET_DIR := "${PWD}/spoa_agent"
 
-default: cargo-test
+default: clippy
   @just --list
 
 # Run HAProxy container with port 5000 exposed

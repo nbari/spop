@@ -225,7 +225,11 @@ try_from_typed_data!(Vec<u8>, Binary);
 /// # Errors
 ///
 /// Returns an error if the input is empty, incomplete, or contains an unsupported type.
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::indexing_slicing)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::indexing_slicing
+)]
 pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
     if input.is_empty() {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
@@ -288,7 +292,12 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::uninlined_format_args)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::uninlined_format_args
+)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};

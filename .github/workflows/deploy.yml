@@ -16,18 +16,168 @@ jobs:
     with:
       branch: main
 
-  publish:
-    name: Publish
+  create-release:
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     needs:
       - test
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d '"' -f 2)
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          # Extract changelog section for current version
+          CHANGELOG=$(awk "/## ${VERSION}/,/^## / {if (/^## / && !/${VERSION}/) exit; print}" CHANGELOG.md | sed '$d' | tail -n +2)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release version ${VERSION}"
+          fi
+          # Use delimiter to handle multi-line output
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ steps.get_version.outputs.version }}
+          body: |
+            # spop ${{ steps.get_version.outputs.version }}
+            
+            HAProxy SPOP (Stream Processing Offload Protocol) Library for Rust
+            
+            ## What's Changed
+            ${{ steps.changelog.outputs.content }}
+            
+            ## Installation
+            
+            Add to your `Cargo.toml`:
+            ```toml
+            [dependencies]
+            spop = "${{ steps.get_version.outputs.version }}"
+            ```
+            
+            Or install via cargo:
+            ```bash
+            cargo add spop@${{ steps.get_version.outputs.version }}
+            ```
+            
+            ## Resources
+            - 📦 [crates.io](https://crates.io/crates/spop)
+            - 📚 [Documentation](https://docs.rs/spop)
+            - 🐛 [Issues](https://github.com/${{ github.repository }}/issues)
+          draft: false
+          prerelease: false
+
+  build-source-archive:
+    name: Build Source Archive
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - create-release
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Create source archive
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          ARCHIVE_NAME="spop-${VERSION}-source"
+          
+          # Create a clean archive excluding unnecessary files
+          git archive --format=tar.gz \
+            --prefix="${ARCHIVE_NAME}/" \
+            -o "${ARCHIVE_NAME}.tar.gz" \
+            HEAD
+          
+          # Also create a zip for Windows users
+          git archive --format=zip \
+            --prefix="${ARCHIVE_NAME}/" \
+            -o "${ARCHIVE_NAME}.zip" \
+            HEAD
+          
+          # Generate checksums
+          sha256sum "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          sha256sum "${ARCHIVE_NAME}.zip" > "${ARCHIVE_NAME}.zip.sha256"
+          
+          ls -lh ${ARCHIVE_NAME}.*
+
+      - name: Upload source tar.gz
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.tar.gz
+          asset_name: spop-${{ needs.create-release.outputs.version }}-source.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload source tar.gz checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.tar.gz.sha256
+          asset_name: spop-${{ needs.create-release.outputs.version }}-source.tar.gz.sha256
+          asset_content_type: text/plain
+
+      - name: Upload source zip
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.zip
+          asset_name: spop-${{ needs.create-release.outputs.version }}-source.zip
+          asset_content_type: application/zip
+
+      - name: Upload source zip checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.zip.sha256
+          asset_name: spop-${{ needs.create-release.outputs.version }}-source.zip.sha256
+          asset_content_type: text/plain
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - create-release
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo publish --token ${CRATES_TOKEN}
+      - name: Publish to crates.io
+        run: cargo publish --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
