@@ -22,7 +22,6 @@ jobs:
     needs:
       - test
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout sources
@@ -56,13 +55,9 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
           body: |
             # spop ${{ steps.get_version.outputs.version }}
             
@@ -124,45 +119,14 @@ jobs:
           
           ls -lh ${ARCHIVE_NAME}.*
 
-      - name: Upload source tar.gz
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload source archives
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.tar.gz
-          asset_name: spop-${{ needs.create-release.outputs.version }}-source.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload source tar.gz checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.tar.gz.sha256
-          asset_name: spop-${{ needs.create-release.outputs.version }}-source.tar.gz.sha256
-          asset_content_type: text/plain
-
-      - name: Upload source zip
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.zip
-          asset_name: spop-${{ needs.create-release.outputs.version }}-source.zip
-          asset_content_type: application/zip
-
-      - name: Upload source zip checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./spop-${{ needs.create-release.outputs.version }}-source.zip.sha256
-          asset_name: spop-${{ needs.create-release.outputs.version }}-source.zip.sha256
-          asset_content_type: text/plain
+          files: |
+            spop-${{ needs.create-release.outputs.version }}-source.tar.gz
+            spop-${{ needs.create-release.outputs.version }}-source.tar.gz.sha256
+            spop-${{ needs.create-release.outputs.version }}-source.zip
+            spop-${{ needs.create-release.outputs.version }}-source.zip.sha256
 
   publish:
     name: Publish to crates.io
