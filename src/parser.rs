@@ -203,11 +203,13 @@ fn parse_key_value_pair(input: &[u8]) -> IResult<&[u8], (String, TypedData)> {
 }
 
 /// Parse a length-prefixed string
-#[allow(clippy::cast_possible_truncation)]
 fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
     let (input, length) = decode_varint(input)?;
+    let length: usize = length
+        .try_into()
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::TooLarge)))?;
 
-    if input.len() < length as usize {
+    if input.len() < length {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
     }
 

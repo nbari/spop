@@ -270,9 +270,11 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
         }
         TYPE_STRING | TYPE_BINARY => {
             let (input, length) = decode_varint(input)?;
+            let length: usize = length
+                .try_into()
+                .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::TooLarge)))?;
 
-            #[allow(clippy::cast_possible_truncation)]
-            if input.len() < length as usize {
+            if input.len() < length {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
 

@@ -1,6 +1,11 @@
 Changelog
 =========
 
+## 0.10.8 - 2026-02-22
+
+### Fixed
+- Fix 32-bit build failure: use `usize` instead of `u64` for `nom::take()` lengths (#12)
+
 ## 0.10.6 - 2025-12-08
 
 ### Fixed
