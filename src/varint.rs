@@ -22,11 +22,11 @@ pub fn encode_varint(i: u64) -> Vec<u8> {
     if i < 240 {
         buf.push(i as u8);
     } else {
-        buf.push((i | 240) as u8);
+        buf.push((i | 0b1111_0000) as u8);
         let mut i = (i - 240) >> 4;
 
         while i >= 128 {
-            buf.push((i | 128) as u8);
+            buf.push((i | 0b1000_0000) as u8);
             i = (i - 128) >> 7;
         }
 
