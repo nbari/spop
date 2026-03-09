@@ -5,7 +5,7 @@ use crate::{
     types::TypedData,
 };
 use semver::Version;
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 /// Frame AGENT-HELLO
 ///
@@ -58,15 +58,15 @@ impl SpopFrame for AgentHello {
         &FrameType::AgentHello
     }
 
-    fn metadata(&self) -> Metadata {
-        Metadata {
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Owned(Metadata {
             flags: FrameFlags::new(true, false), // FIN flag set, ABORT flag not set
             stream_id: 0,
             frame_id: 0,
-        }
+        })
     }
 
-    fn payload(&self) -> FramePayload {
+    fn payload(&self) -> FramePayload<'_> {
         let mut map = HashMap::new();
 
         let version_str = format!("{}.{}", self.version.major, self.version.minor);

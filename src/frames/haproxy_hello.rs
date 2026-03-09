@@ -5,7 +5,7 @@ use crate::{
     types::TypedData,
 };
 use semver::Version;
-use std::{collections::HashMap, convert::TryFrom, str::FromStr};
+use std::{borrow::Cow, collections::HashMap, convert::TryFrom, str::FromStr};
 
 /// Frame HAPROXY-HELLO
 ///
@@ -94,7 +94,7 @@ impl HaproxyHello {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        map.insert("capabilities".into(), TypedData::String(caps_string));
+        map.insert("capabilities".to_string(), TypedData::String(caps_string));
 
         if let Some(healthcheck) = self.healthcheck {
             map.insert("healthcheck".to_string(), TypedData::Bool(healthcheck));
@@ -122,16 +122,16 @@ impl SpopFrame for HaproxyHelloFrame {
         &FrameType::HaproxyHello
     }
 
-    fn metadata(&self) -> Metadata {
-        self.metadata.clone()
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Borrowed(&self.metadata)
     }
 
-    fn payload(&self) -> FramePayload {
+    fn payload(&self) -> FramePayload<'_> {
         FramePayload::KVList(self.payload.to_kv_list())
     }
 }
 
-impl TryFrom<FramePayload> for HaproxyHello {
+impl TryFrom<FramePayload<'_>> for HaproxyHello {
     type Error = String;
 
     fn try_from(payload: FramePayload) -> Result<Self, Self::Error> {

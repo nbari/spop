@@ -163,7 +163,7 @@ pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
 }
 
 /// Parse entire KV-LIST payload
-fn parse_key_value_pairs(input: &[u8]) -> IResult<&[u8], FramePayload> {
+fn parse_key_value_pairs(input: &[u8]) -> IResult<&[u8], FramePayload<'_>> {
     // Create the parser combinator chain
     let mut parser = all_consuming(many0(complete(parse_key_value_pair)));
 

@@ -3,7 +3,7 @@ use crate::{
     frame::{FrameFlags, FramePayload, FrameType, Metadata},
     types::TypedData,
 };
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 /// Frame AGENT-DISCONNECT
 ///
@@ -44,15 +44,15 @@ impl SpopFrame for AgentDisconnect {
         &FrameType::AgentDisconnect
     }
 
-    fn metadata(&self) -> Metadata {
-        Metadata {
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Owned(Metadata {
             flags: FrameFlags::new(true, false), // FIN flag set, ABORT flag not set
             stream_id: 0,
             frame_id: 0,
-        }
+        })
     }
 
-    fn payload(&self) -> FramePayload {
+    fn payload(&self) -> FramePayload<'_> {
         let mut map = HashMap::new();
 
         map.insert(

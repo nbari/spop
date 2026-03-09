@@ -109,7 +109,7 @@ async fn handle_connection(u_stream: UnixStream) -> Result<()> {
                     // Create the Ack frame
                     let mut ack = Ack::new(frame.metadata().stream_id, frame.metadata().frame_id);
 
-                    for message in messages {
+                    for message in *messages {
                         match message.name.as_str() {
                             "check-client-ip" => {
                                 let random_value: u32 = rand::random_range(0..100);

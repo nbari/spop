@@ -26,6 +26,8 @@ pub use self::codec::SpopCodec;
 
 pub use semver::Version;
 
+use std::borrow::Cow;
+
 /// core trait for the SPOP frame
 ///
 /// <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt#L673>
@@ -96,8 +98,8 @@ pub use semver::Version;
 /// ```
 pub trait SpopFrame: std::fmt::Debug + Send {
     fn frame_type(&self) -> &FrameType;
-    fn metadata(&self) -> Metadata;
-    fn payload(&self) -> FramePayload;
+    fn metadata(&self) -> Cow<'_, Metadata>;
+    fn payload(&self) -> FramePayload<'_>;
 
     /// # Errors
     ///
@@ -138,7 +140,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
         FramePayload::ListOfActions(actions) => {
             // ACTION-SET-VAR  : <SET-VAR:1 byte><NB-ARGS:1 byte><VAR-SCOPE:1 byte><VAR-NAME><VAR-VALUE>
 
-            for action in actions {
+            for action in *actions {
                 match action {
                     Action::SetVar { scope, name, value } => {
                         // Action type: SET-VAR (1 byte)

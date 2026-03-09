@@ -2,6 +2,7 @@ use crate::{
     SpopFrame,
     frame::{FramePayload, FrameType, Message, Metadata},
 };
+use std::borrow::Cow;
 
 /// Frame Notify
 ///
@@ -29,11 +30,11 @@ impl SpopFrame for NotifyFrame {
         &FrameType::Notify
     }
 
-    fn metadata(&self) -> Metadata {
-        self.metadata.clone()
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Borrowed(&self.metadata)
     }
 
-    fn payload(&self) -> FramePayload {
-        FramePayload::ListOfMessages(self.messages.clone())
+    fn payload(&self) -> FramePayload<'_> {
+        FramePayload::ListOfMessages(&self.messages)
     }
 }
