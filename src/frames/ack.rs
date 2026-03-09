@@ -4,6 +4,7 @@ use crate::{
     frame::{FrameFlags, FramePayload, FrameType, Metadata},
     types::TypedData,
 };
+use std::borrow::Cow;
 
 /// Frame Ack
 ///
@@ -63,15 +64,15 @@ impl SpopFrame for Ack {
         &FrameType::Ack
     }
 
-    fn metadata(&self) -> Metadata {
-        Metadata {
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Owned(Metadata {
             flags: FrameFlags::new(true, false), // FIN flag set, ABORT flag not set
             stream_id: self.stream_id,
             frame_id: self.frame_id,
-        }
+        })
     }
 
-    fn payload(&self) -> FramePayload {
-        FramePayload::ListOfActions(self.actions.clone())
+    fn payload(&self) -> FramePayload<'_> {
+        FramePayload::ListOfActions(&self.actions)
     }
 }

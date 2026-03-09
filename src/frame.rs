@@ -131,9 +131,9 @@ impl Metadata {
 ///     KV-VALUE         : <TYPED-DATA>
 /// ```
 #[derive(Debug)]
-pub enum FramePayload {
-    ListOfMessages(Vec<Message>),
-    ListOfActions(Vec<Action>),
+pub enum FramePayload<'a> {
+    ListOfMessages(&'a [Message]),
+    ListOfActions(&'a [Action]),
     KVList(HashMap<String, TypedData>),
 }
 

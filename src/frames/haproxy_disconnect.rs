@@ -3,7 +3,7 @@ use crate::{
     frame::{FramePayload, FrameType, Metadata},
     types::TypedData,
 };
-use std::{collections::HashMap, convert::TryFrom};
+use std::{borrow::Cow, collections::HashMap, convert::TryFrom};
 
 /// Frame HAPROXY-DISCONNECT
 ///
@@ -67,16 +67,16 @@ impl SpopFrame for HaproxyDisconnectFrame {
         &FrameType::HaproxyDisconnect
     }
 
-    fn metadata(&self) -> Metadata {
-        self.metadata.clone()
+    fn metadata(&self) -> Cow<'_, Metadata> {
+        Cow::Borrowed(&self.metadata)
     }
 
-    fn payload(&self) -> FramePayload {
+    fn payload(&self) -> FramePayload<'_> {
         FramePayload::KVList(self.payload.to_kv_list())
     }
 }
 
-impl TryFrom<FramePayload> for HaproxyDisconnect {
+impl TryFrom<FramePayload<'_>> for HaproxyDisconnect {
     type Error = String;
 
     fn try_from(payload: FramePayload) -> Result<Self, Self::Error> {
