@@ -106,23 +106,24 @@ pub trait SpopFrame: std::fmt::Debug + Send {
     /// Returns an error if serialization fails or if the payload type is unsupported.
     #[allow(clippy::cast_possible_truncation)]
     fn serialize(&self) -> std::io::Result<Vec<u8>> {
-        let mut serialized = Vec::new();
+        let metadata = self.metadata();
+        let payload = self.payload();
+        let frame_len = 1 + metadata.serialized_len() + payload_serialized_len(&payload)?;
+        let mut serialized = Vec::with_capacity(4 + frame_len);
+
+        // Prepend frame length
+        serialized.extend_from_slice(&(frame_len as u32).to_be_bytes());
 
         // frame type (1 byte)
         serialized.push(self.frame_type().to_u8());
 
         // Metadata
-        serialized.extend(self.metadata().serialize());
+        metadata.write_to(&mut serialized);
 
         // payload
-        encode_payload(&self.payload(), &mut serialized)?;
+        encode_payload(&payload, &mut serialized)?;
 
-        // Prepend frame length
-        let frame_len = serialized.len() as u32;
-        let mut output = frame_len.to_be_bytes().to_vec();
-        output.extend(serialized);
-
-        Ok(output)
+        Ok(serialized)
     }
 }
 
@@ -153,7 +154,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         buf.push(scope.to_u8());
 
                         // Serialize variable name (length + bytes)
-                        buf.extend(encode_varint(name.len() as u64));
+                        varint::encode_varint_into(name.len() as u64, buf);
                         buf.extend_from_slice(name.as_bytes());
 
                         // Serialize variable value based on type
@@ -171,7 +172,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         buf.push(scope.to_u8());
 
                         // Serialize variable name (length + bytes)
-                        buf.extend(encode_varint(name.len() as u64));
+                        varint::encode_varint_into(name.len() as u64, buf);
                         buf.extend_from_slice(name.as_bytes());
                     }
                 }
@@ -183,7 +184,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                 // <KEY-LENGTH><KEY><VALUE-TYPE><VALUE-LNGTH><VALUE>
 
                 // use encode_varint for the length of the key
-                buf.extend(encode_varint(key.len() as u64));
+                varint::encode_varint_into(key.len() as u64, buf);
 
                 // serialize the key
                 buf.extend_from_slice(key.as_bytes());
@@ -193,7 +194,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         // STRING: <8><LENGTH:varint><BYTES>
                         buf.push(0x08);
                         // use encode_varint for the length of the value
-                        buf.extend(encode_varint(val.len() as u64));
+                        varint::encode_varint_into(val.len() as u64, buf);
                         // serialize the value
                         buf.extend_from_slice(val.as_bytes());
                     }
@@ -202,7 +203,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
                         // UINT32: <3><VALUE:varint>
                         buf.push(0x03);
                         // use encode_varint for the length of the value
-                        buf.extend(encode_varint(u64::from(*val)));
+                        varint::encode_varint_into(u64::from(*val), buf);
                     }
 
                     _ => {}
@@ -219,4 +220,38 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
     }
 
     Ok(())
+}
+
+fn payload_serialized_len(payload: &FramePayload) -> std::io::Result<usize> {
+    match payload {
+        FramePayload::ListOfActions(actions) => Ok(actions
+            .iter()
+            .map(|action| match action {
+                Action::SetVar { name, value, .. } => {
+                    3 + varint::varint_len(name.len() as u64) + name.len() + value.serialized_len()
+                }
+                Action::UnSetVar { name, .. } => {
+                    3 + varint::varint_len(name.len() as u64) + name.len()
+                }
+            })
+            .sum()),
+        FramePayload::KVList(kv_pairs) => Ok(kv_pairs
+            .iter()
+            .map(|(key, value)| {
+                varint::varint_len(key.len() as u64)
+                    + key.len()
+                    + match value {
+                        TypedData::String(val) => {
+                            1 + varint::varint_len(val.len() as u64) + val.len()
+                        }
+                        TypedData::UInt32(val) => 1 + varint::varint_len(u64::from(*val)),
+                        _ => 0,
+                    }
+            })
+            .sum()),
+        FramePayload::ListOfMessages(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Unsupported frame payload type",
+        )),
+    }
 }

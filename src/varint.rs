@@ -17,7 +17,31 @@ use nom::{IResult, number::complete::be_u8};
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
 pub fn encode_varint(i: u64) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(varint_len(i));
+    encode_varint_into(i, &mut buf);
+    buf
+}
+
+#[must_use]
+pub const fn varint_len(i: u64) -> usize {
+    if i < 240 {
+        1
+    } else {
+        let mut len = 2;
+        let mut value = (i - 240) >> 4;
+
+        while value >= 128 {
+            len += 1;
+            value = (value - 128) >> 7;
+        }
+
+        len
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn encode_varint_into(i: u64, buf: &mut Vec<u8>) {
+    buf.reserve(varint_len(i));
 
     if i < 240 {
         buf.push(i as u8);
@@ -32,8 +56,6 @@ pub fn encode_varint(i: u64) -> Vec<u8> {
 
         buf.push(i as u8);
     }
-
-    buf
 }
 
 /// Decodes a variable-length integer (varint) from the input byte slice.

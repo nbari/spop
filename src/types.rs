@@ -1,4 +1,4 @@
-use crate::varint::{decode_varint, encode_varint};
+use crate::varint::{decode_varint, encode_varint_into, varint_len};
 use nom::{
     IResult,
     bytes::complete::take,
@@ -85,19 +85,19 @@ impl TypedData {
             }
             Self::Int32(val) => {
                 buf.push(TYPE_INT32);
-                buf.extend(encode_varint(*val as u64));
+                encode_varint_into(*val as u64, buf);
             }
             Self::UInt32(val) => {
                 buf.push(TYPE_UINT32);
-                buf.extend(encode_varint(u64::from(*val)));
+                encode_varint_into(u64::from(*val), buf);
             }
             Self::Int64(val) => {
                 buf.push(TYPE_INT64);
-                buf.extend(encode_varint(*val as u64));
+                encode_varint_into(*val as u64, buf);
             }
             Self::UInt64(val) => {
                 buf.push(TYPE_UINT64);
-                buf.extend(encode_varint(*val));
+                encode_varint_into(*val, buf);
             }
             Self::IPv4(addr) => {
                 buf.push(TYPE_IPV4);
@@ -109,14 +109,30 @@ impl TypedData {
             }
             Self::String(val) => {
                 buf.push(TYPE_STRING);
-                buf.extend(encode_varint(val.len() as u64));
+                encode_varint_into(val.len() as u64, buf);
                 buf.extend_from_slice(val.as_bytes());
             }
             Self::Binary(val) => {
                 buf.push(TYPE_BINARY);
-                buf.extend(encode_varint(val.len() as u64));
+                encode_varint_into(val.len() as u64, buf);
                 buf.extend_from_slice(val);
             }
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::cast_sign_loss)]
+    pub fn serialized_len(&self) -> usize {
+        match self {
+            Self::Null | Self::Bool(_) => 1,
+            Self::Int32(val) => 1 + varint_len(*val as u64),
+            Self::UInt32(val) => 1 + varint_len(u64::from(*val)),
+            Self::Int64(val) => 1 + varint_len(*val as u64),
+            Self::UInt64(val) => 1 + varint_len(*val),
+            Self::IPv4(_) => 1 + 4,
+            Self::IPv6(_) => 1 + 16,
+            Self::String(val) => 1 + varint_len(val.len() as u64) + val.len(),
+            Self::Binary(val) => 1 + varint_len(val.len() as u64) + val.len(),
         }
     }
 }

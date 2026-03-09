@@ -1,4 +1,8 @@
-use crate::{actions::Action, types::TypedData, varint::encode_varint};
+use crate::{
+    actions::Action,
+    types::TypedData,
+    varint::{encode_varint_into, varint_len},
+};
 use nom::error::ErrorKind;
 use std::collections::HashMap;
 
@@ -101,15 +105,23 @@ pub struct Metadata {
 impl Metadata {
     #[must_use]
     pub fn serialize(&self) -> Vec<u8> {
-        let mut serialized = Vec::new();
+        let mut serialized = Vec::with_capacity(self.serialized_len());
+        self.write_to(&mut serialized);
+        serialized
+    }
+
+    #[must_use]
+    pub fn serialized_len(&self) -> usize {
+        4 + varint_len(self.stream_id) + varint_len(self.frame_id)
+    }
+
+    pub fn write_to(&self, buf: &mut Vec<u8>) {
         // Serialize flags (4 bytes)
-        serialized.extend_from_slice(&self.flags.to_be_bytes());
+        buf.extend_from_slice(&self.flags.to_be_bytes());
 
         // Serialize stream_id and frame_id (both encoded as varint)
-        serialized.extend(encode_varint(self.stream_id));
-        serialized.extend(encode_varint(self.frame_id));
-
-        serialized
+        encode_varint_into(self.stream_id, buf);
+        encode_varint_into(self.frame_id, buf);
     }
 }
 

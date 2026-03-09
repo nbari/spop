@@ -1,6 +1,17 @@
 Changelog
 =========
 
+## 0.11.0 - 2026-03-09
+
+### Changed
+- Reduce allocations during frame handling by borrowing metadata, message lists, and action lists instead of cloning them, thanks @famfo
+- Update frame serialization to operate on borrowed slices for `NOTIFY` and `ACK` payloads
+- Use binary notation for varint bit masks for readability
+
+### Breaking
+- Change the public `SpopFrame` trait to return `Cow<'_, Metadata>` and `FramePayload<'_>`
+- Change `FramePayload::ListOfMessages` and `FramePayload::ListOfActions` to hold borrowed slices instead of owned `Vec`s
+
 ## 0.10.8 - 2026-02-22
 
 ### Fixed
