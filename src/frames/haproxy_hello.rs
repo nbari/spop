@@ -1,5 +1,5 @@
 use crate::{
-    SpopFrame,
+    MIN_FRAME_SIZE, SUPPORTED_VERSION, SpopFrame, StatusCode,
     frame::{FramePayload, FrameType, Metadata},
     frames::capabilities::FrameCapabilities,
     types::TypedData,
@@ -91,7 +91,7 @@ impl HaproxyHello {
         let caps_string = self
             .capabilities
             .iter()
-            .map(std::string::ToString::to_string)
+            .map(|cap| cap.as_str())
             .collect::<Vec<_>>()
             .join(",");
         map.insert("capabilities".to_string(), TypedData::String(caps_string));
@@ -115,6 +115,44 @@ impl HaproxyHello {
 pub struct HaproxyHelloFrame {
     pub metadata: Metadata,
     pub payload: HaproxyHello,
+}
+
+impl HaproxyHello {
+    /// Returns the SPOP version to announce in the AGENT-HELLO reply, or `None` if `HAProxy`
+    /// announced nothing this crate can speak.
+    ///
+    /// The spec requires the agent's version to be "lower or equal than one of major versions
+    /// announced by `HAProxy`", and a `HAProxy` that announces a major version also supports every
+    /// earlier minor version of it. Replying with an unannounced version earns a
+    /// HAPROXY-DISCONNECT carrying [`StatusCode::BadVersion`].
+    ///
+    /// `HAProxy` currently announces only `2.0` — it dropped `1.0` over a frame-flags bug.
+    #[must_use]
+    pub fn negotiate_version(&self) -> Option<Version> {
+        self.supported_versions
+            .iter()
+            .any(|announced| {
+                announced.major == SUPPORTED_VERSION.major && *announced >= SUPPORTED_VERSION
+            })
+            .then(|| SUPPORTED_VERSION.clone())
+    }
+
+    /// Returns the `max-frame-size` to announce in the AGENT-HELLO reply.
+    ///
+    /// The reply "must be lower or equal to the value in the HAPROXY-HELLO frame", so this is
+    /// the smaller of what `HAProxy` offered and `our_limit`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatusCode::BadFrameSize`] if either side is below [`MIN_FRAME_SIZE`]; the spec
+    /// requires peers to support at least that much and reserves this code for the violation.
+    pub fn negotiate_max_frame_size(&self, our_limit: u32) -> Result<u32, StatusCode> {
+        if self.max_frame_size < MIN_FRAME_SIZE || our_limit < MIN_FRAME_SIZE {
+            return Err(StatusCode::BadFrameSize);
+        }
+
+        Ok(self.max_frame_size.min(our_limit))
+    }
 }
 
 impl SpopFrame for HaproxyHelloFrame {

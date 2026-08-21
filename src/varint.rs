@@ -1,4 +1,8 @@
-use nom::{IResult, number::complete::be_u8};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+    number::complete::be_u8,
+};
 
 /// <https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt#L659-L667>
 ///
@@ -14,14 +18,6 @@ use nom::{IResult, number::complete::be_u8};
 ///  ...
 ///
 /// ```
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-pub fn encode_varint(i: u64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(varint_len(i));
-    encode_varint_into(i, &mut buf);
-    buf
-}
-
 #[must_use]
 pub const fn varint_len(i: u64) -> usize {
     if i < 240 {
@@ -39,10 +35,12 @@ pub const fn varint_len(i: u64) -> usize {
     }
 }
 
+/// Encodes a varint by appending it to `buf`.
+///
+/// Allocation-free: the caller owns the buffer. Pair it with [`varint_len`] when you need to
+/// size that buffer up front.
 #[allow(clippy::cast_possible_truncation)]
-pub(crate) fn encode_varint_into(i: u64, buf: &mut Vec<u8>) {
-    buf.reserve(varint_len(i));
-
+pub fn encode_varint_into(i: u64, buf: &mut Vec<u8>) {
     if i < 240 {
         buf.push(i as u8);
     } else {
@@ -71,13 +69,30 @@ pub fn decode_varint(input: &[u8]) -> IResult<&[u8], u64> {
     }
 
     let mut value = u64::from(first_byte);
-    let mut shift = 4;
+    let mut shift = 4u32;
 
     loop {
         let (new_input, next_byte) = be_u8(input)?;
         input = new_input;
 
-        value += u64::from(next_byte) << shift;
+        // The first byte carries 4 payload bits and each continuation byte carries 7, so a u64
+        // needs at most 10 bytes. Without this bound `shift` runs past 63 and both the shift and
+        // the addition overflow on attacker-controlled input: a panic in debug builds, a silently
+        // wrong value in release.
+        //
+        // `checked_shl` guards the shift amount, not bits shifted off the top, so a non-minimal
+        // encoding can still decode to a value that is wrong rather than rejected. That matches
+        // `HAProxy`'s own decoder, which performs no canonical-form check either, and it cannot
+        // reach past this function: string and binary lengths are bounds-checked against the
+        // remaining input by the caller, so an inflated length errors rather than over-reading.
+        let addend = u64::from(next_byte)
+            .checked_shl(shift)
+            .ok_or_else(|| nom::Err::Error(Error::new(input, ErrorKind::TooLarge)))?;
+
+        value = value
+            .checked_add(addend)
+            .ok_or_else(|| nom::Err::Error(Error::new(input, ErrorKind::TooLarge)))?;
+
         shift += 7;
 
         if next_byte < 128 {
@@ -92,6 +107,35 @@ pub fn decode_varint(input: &[u8]) -> IResult<&[u8], u64> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::unreadable_literal)]
 mod tests {
     use super::*;
+
+    /// `shift` used to climb past 63 with no cap on continuation bytes, overflowing both the
+    /// shift and the addition: a panic in debug builds, a silently wrong value in release. This
+    /// input is reachable from the very first varint of every frame (the stream-id).
+    #[test]
+    fn test_decode_varint_rejects_overlong_input() {
+        let mut input = vec![0xF0];
+        input.extend(std::iter::repeat_n(0x80, 12));
+        input.push(0x01);
+
+        assert!(
+            decode_varint(&input).is_err(),
+            "an overlong varint must be rejected, not overflow"
+        );
+    }
+
+    /// A u64 needs at most 10 bytes (4 payload bits in the first, 7 in each continuation), so
+    /// the widest legitimate value must still decode.
+    #[test]
+    fn test_decode_varint_accepts_widest_legitimate_value() {
+        let mut encoded = Vec::new();
+        encode_varint_into(u64::MAX, &mut encoded);
+
+        assert!(encoded.len() <= 10, "u64::MAX must fit in 10 bytes");
+
+        let (rest, decoded) = decode_varint(&encoded).expect("u64::MAX must round-trip");
+        assert_eq!(decoded, u64::MAX);
+        assert!(rest.is_empty());
+    }
 
     #[test]
     fn test_decode_varint() {
@@ -248,7 +292,8 @@ mod tests {
 
         for &value in &test_values {
             // Encode the value
-            let encoded = encode_varint(value);
+            let mut encoded = Vec::new();
+            encode_varint_into(value, &mut encoded);
 
             // Decode the encoded value
             let (remaining_input, decoded) =
@@ -269,7 +314,8 @@ mod tests {
     fn test_encode_decode_varint_loop() {
         // Test encoding and decoding a large number of values
         for i in 0..300000 {
-            let encoded = encode_varint(i);
+            let mut encoded = Vec::new();
+            encode_varint_into(i, &mut encoded);
             let (remaining_input, decoded) =
                 decode_varint(&encoded).expect("Failed to decode varint");
             assert_eq!(i, decoded, "Failed for value: {i}");

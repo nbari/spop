@@ -68,7 +68,7 @@ pub enum Action {
 /// ```text
 /// VAR-SCOPE: <PROCESS> | <SESSION> | <TRANSACTION> | <REQUEST> | <RESPONSE>
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum VarScope {
     Process = 0,
     Session = 1,

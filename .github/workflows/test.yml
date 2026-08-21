@@ -46,6 +46,18 @@ jobs:
       - name: Check
         run: cargo check
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Catches broken intra-doc links, which `warnings = "deny"` turns into errors. A crate that
+      # fails this still publishes, but lands on docs.rs with no documentation at all.
+      - name: Doc
+        run: cargo doc --no-deps --all-features
+
   test:
     name: Test
     strategy:
@@ -60,6 +72,7 @@ jobs:
       - format
       - lint
       - check
+      - docs
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

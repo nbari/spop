@@ -65,7 +65,7 @@ Or directly with podman:
 mkdir -p spoa_agent
 chmod -R 777 spoa_agent
 podman build -t haproxy-spoe .
-podman run -d --name haproxy --network=host -v "${PWD}/spoa_agent:/var/run/haproxy" haproxy-spoe
+podman run -d --name haproxy --network=host --security-opt label=disable -v "${PWD}/spoa_agent:/var/run/haproxy" haproxy-spoe
 ```
 
 To stop the container:

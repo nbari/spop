@@ -44,8 +44,15 @@ jobs:
         id: changelog
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          # Extract changelog section for current version
-          CHANGELOG=$(awk "/## ${VERSION}/,/^## / {if (/^## / && !/${VERSION}/) exit; print}" CHANGELOG.md | sed '$d' | tail -n +2)
+          # Extract the changelog section for this version: everything between its heading and
+          # the next one. An awk range like /## $VERSION/,/^## / does not work here, because the
+          # range's start line also matches the end pattern, so it closes immediately and yields
+          # nothing.
+          CHANGELOG=$(awk -v ver="$VERSION" '
+            $0 ~ "^## " ver { inside = 1; next }
+            inside && /^## / { exit }
+            inside { print }
+          ' CHANGELOG.md)
           if [ -z "$CHANGELOG" ]; then
             CHANGELOG="Release version ${VERSION}"
           fi

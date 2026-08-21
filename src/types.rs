@@ -15,6 +15,11 @@ use thiserror::Error;
 ///
 ///     TYPED-DATA    : <TYPE:4 bits><FLAGS:4 bits><DATA>
 ///
+/// NOTE: despite what that line suggests, the type is the LOW nibble of the first byte and the
+/// flags are the HIGH nibble. `HAProxy` defines `SPOP_DATA_T_MASK 0x0F` and
+/// `SPOP_DATA_FL_MASK 0xF0` in `include/haproxy/spoe-t.h`, and this crate encodes and decodes
+/// accordingly.
+///
 /// Supported types and their representation are:
 ///
 ///     TYPE                       |  ID | DESCRIPTION

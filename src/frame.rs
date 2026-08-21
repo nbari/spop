@@ -95,7 +95,7 @@ impl FrameType {
 /// ```text
 /// METADATA    : <FLAGS:4 bytes> <STREAM-ID:varint> <FRAME-ID:varint>
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Metadata {
     pub flags: FrameFlags,
     pub stream_id: u64,
@@ -103,13 +103,6 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    #[must_use]
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut serialized = Vec::with_capacity(self.serialized_len());
-        self.write_to(&mut serialized);
-        serialized
-    }
-
     #[must_use]
     pub fn serialized_len(&self) -> usize {
         4 + varint_len(self.stream_id) + varint_len(self.frame_id)
@@ -183,7 +176,7 @@ pub struct Message {
 /// ABORT: Indicates that the processing of the current frame must be
 ///        cancelled.
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct FrameFlags(u32);
 
 impl FrameFlags {

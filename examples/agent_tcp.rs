@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use spop::{
-    SpopCodec, SpopFrame, Version,
+    MAX_FRAME_SIZE_LIMIT, SpopCodec, SpopFrame, StatusCode,
     actions::VarScope,
     frame::{FramePayload, FrameType},
     frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},
@@ -21,12 +21,45 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Sends an AGENT-DISCONNECT carrying `status` and closes the connection.
+///
+/// The spec requires an agent that hits an error to report it this way rather than just
+/// dropping the socket, so `HAProxy` can log the reason instead of guessing.
+async fn disconnect(socket: &mut Framed<TcpStream, SpopCodec>, status: StatusCode) -> Result<()> {
+    let frame = AgentDisconnect {
+        status_code: status.to_u32(),
+        message: status.message().to_string(),
+    };
+
+    eprintln!("Disconnecting: {status}");
+    socket.send(Box::new(frame)).await?;
+    socket.close().await?;
+
+    Ok(())
+}
+
 async fn handle_connection(u_stream: TcpStream) -> Result<()> {
-    let mut socket = Framed::new(u_stream, SpopCodec);
+    let mut socket = Framed::new(u_stream, SpopCodec::default());
 
     while let Some(result) = socket.next().await {
         let frame = match result {
             Ok(f) => f,
+            // HAProxy closes the connection abruptly at the end of an `option spop-check`
+            // health check, and again whenever it retires an idle connection, so a reset or a
+            // truncated read is a normal end of life rather than a fault. Logging those at error
+            // level buries the failures that do matter.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                println!("Peer closed the connection ({})", e.kind());
+                break;
+            }
             Err(e) => {
                 eprintln!("Frame read error: {e:?}");
                 break;
@@ -39,13 +72,26 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                 let hello = HaproxyHello::try_from(frame.payload())
                     .map_err(|_| anyhow::anyhow!("Failed to parse HaproxyHello"))?;
 
-                let max_frame_size = hello.max_frame_size;
                 let is_healthcheck = hello.healthcheck.unwrap_or(false);
+
                 // * "version"    <STRING>
                 // This is the SPOP version the agent supports. It must follow the format
                 // "Major.Minor" and it must be lower or equal than one of major versions
-                // announced by HAProxy.
-                let version = Version::parse("2.0.0")?;
+                // announced by HAProxy. Replying with an unannounced version earns a
+                // HAPROXY-DISCONNECT, so negotiate instead of assuming.
+                let Some(version) = hello.negotiate_version() else {
+                    return disconnect(&mut socket, StatusCode::BadVersion).await;
+                };
+
+                // Announce the smaller of what HAProxy offered and what we accept.
+                let max_frame_size = match hello.negotiate_max_frame_size(MAX_FRAME_SIZE_LIMIT) {
+                    Ok(size) => size,
+                    Err(status) => return disconnect(&mut socket, status).await,
+                };
+
+                // Hold the peer to what was agreed: until now the codec only had the
+                // conservative MAX_FRAME_SIZE_LIMIT backstop to work with.
+                socket.codec_mut().set_max_frame_size(max_frame_size);
 
                 // Create the AgentHello with the values
                 let agent_hello = AgentHello {
@@ -72,17 +118,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
 
             // Respond with AgentDisconnect frame
             FrameType::HaproxyDisconnect => {
-                let agent_disconnect = AgentDisconnect {
-                    status_code: 0,
-                    message: "Goodbye".to_string(),
-                };
-
-                println!("Sending AgentDisconnect: {:#?}", agent_disconnect.payload());
-
-                socket.send(Box::new(agent_disconnect)).await?;
-                socket.close().await?;
-
-                return Ok(());
+                return disconnect(&mut socket, StatusCode::None).await;
             }
 
             // Respond with Ack frame

@@ -80,7 +80,7 @@ impl SpopFrame for AgentHello {
         let caps_string = self
             .capabilities
             .iter()
-            .map(std::string::ToString::to_string)
+            .map(|cap| cap.as_str())
             .collect::<Vec<_>>()
             .join(",");
         map.insert("capabilities".into(), TypedData::String(caps_string));

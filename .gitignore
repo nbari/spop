@@ -3,3 +3,6 @@ debug/
 Cargo.lock
 **/*.rs.bk
 varint
+
+# Created by the podman container mounted here during integration testing
+spoa_agent/

@@ -20,7 +20,7 @@ use std::{fmt, str::FromStr};
 ///
 /// NOTE: Fragmentation and async capabilities were deprecated and are now ignored.
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameCapabilities {
     Pipelining,
 }
@@ -29,21 +29,29 @@ impl FromStr for FrameCapabilities {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "pipelining" => Ok(Self::Pipelining),
+        if s.eq_ignore_ascii_case("pipelining") {
             // Add more capabilities as needed
-            _ => Err(format!("Unknown capability: {s}")),
+            Ok(Self::Pipelining)
+        } else {
+            Err(format!("Unknown capability: {s}"))
+        }
+    }
+}
+
+impl FrameCapabilities {
+    /// The wire name of this capability.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            // Add more capabilities here when needed
+            Self::Pipelining => "pipelining",
         }
     }
 }
 
 impl fmt::Display for FrameCapabilities {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Pipelining => "pipelining",
-            // Add more capabilities here when needed
-        };
-        write!(f, "{s}")
+        write!(f, "{}", self.as_str())
     }
 }
 

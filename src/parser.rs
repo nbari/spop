@@ -1,3 +1,4 @@
+use crate::MAX_FRAME_SIZE_LIMIT;
 use crate::{
     SpopFrame,
     frame::{FrameFlags, FramePayload, FrameType, Message, Metadata},
@@ -10,10 +11,12 @@ use crate::{
 use nom::{
     Err, IResult, Parser,
     bytes::complete::take,
-    combinator::{all_consuming, complete},
+    combinator::all_consuming,
     error::{Error, ErrorKind},
-    multi::{many_m_n, many0},
-    number::streaming::{be_u8, be_u32},
+    number::{
+        complete::{be_u8, be_u32},
+        streaming::be_u32 as be_u32_streaming,
+    },
 };
 use std::collections::HashMap;
 
@@ -24,11 +27,41 @@ use std::collections::HashMap;
 /// Returns an error if the input is incomplete, malformed, or contains an unsupported frame type.
 #[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
 pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
+    parse_frame_with_limit(input, MAX_FRAME_SIZE_LIMIT)
+}
+
+/// Parse a frame, rejecting any frame whose declared length exceeds `max_frame_size`.
+///
+/// Prefer this over [`parse_frame`] once the HELLO handshake has settled on a value: it holds the
+/// peer to what it actually agreed to, rather than to [`MAX_FRAME_SIZE_LIMIT`]. This is what
+/// [`crate::SpopCodec`] calls.
+///
+/// # Errors
+///
+/// Returns an error if the input is incomplete, malformed, exceeds `max_frame_size`, or contains
+/// an unsupported frame type.
+#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+pub fn parse_frame_with_limit(
+    input: &[u8],
+    max_frame_size: u32,
+) -> IResult<&[u8], Box<dyn SpopFrame>> {
     // Exchange between HAProxy and agents are made using FRAME packets. All frames must be
     // prefixed with their size encoded on 4 bytes in network byte order:
     // <FRAME-LENGTH:4 bytes> <FRAME>
     //
-    let (input, frame_length) = be_u32(input)?;
+    // Only the length prefix may legitimately be incomplete: everything after it is parsed
+    // from a frame body we have already fully received, so it uses `complete` parsers.
+    let (input, frame_length) = be_u32_streaming(input)?;
+
+    // The peer is untrusted and this length is four bytes wide, so it can claim up to ~4 GiB.
+    // Nothing below will ever complete such a frame, so the codec never calls `advance` and the
+    // read buffer is never drained: it accumulates everything the peer sends, without bound and
+    // never reclaimed. Capping the claim keeps that bounded. (The peer must actually transmit the
+    // bytes to occupy them -- this is memory exhaustion, not amplification.)
+    if frame_length > max_frame_size {
+        return Err(nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)));
+    }
+
     // Check if the input has enough bytes for the frame
     // If not, return the same error nom would return.
     if input.len() < frame_length as usize {
@@ -37,13 +70,9 @@ pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
         )));
     }
 
-    // Extract only frame body
+    // Extract only frame body. `bytes::complete::take` yields exactly `frame_length` bytes or
+    // errors, and the check above already guaranteed they are available.
     let (remaining, frame) = take(frame_length)(input)?;
-
-    // check if the frame length is correct
-    if frame.len() != frame_length as usize {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
-    }
 
     //A frame always starts with its type, on one byte, followed by metadata containing flags, on 4
     //bytes and a two variable-length integer representing the stream identifier and the frame
@@ -164,23 +193,22 @@ pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
 
 /// Parse entire KV-LIST payload
 fn parse_key_value_pairs(input: &[u8]) -> IResult<&[u8], FramePayload<'_>> {
-    // Create the parser combinator chain
-    let mut parser = all_consuming(many0(complete(parse_key_value_pair)));
-
-    // Execute the parser with the input
-    let (input, pairs) = parser.parse(input)?;
-
     let mut map = HashMap::new();
+    let mut remaining = input;
 
-    // handle duplicate keys
-    for (key, value) in pairs {
-        if map.contains_key(&key) {
-            return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
+    // Every pair consumes at least one byte (the varint length prefix of its name), so this
+    // cannot spin. Folding directly into the map avoids the throwaway Vec `many0` would build.
+    while !remaining.is_empty() {
+        let (rest, (key, value)) = parse_key_value_pair(remaining)?;
+        remaining = rest;
+
+        // handle duplicate keys
+        if map.insert(key, value).is_some() {
+            return Err(nom::Err::Failure(Error::new(remaining, ErrorKind::Tag)));
         }
-        map.insert(key, value);
     }
 
-    Ok((input, FramePayload::KVList(map)))
+    Ok((remaining, FramePayload::KVList(map)))
 }
 
 /// Parse a key-value pair (used in KV-LIST)
@@ -227,27 +255,27 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
 #[allow(clippy::indexing_slicing)]
 fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
     let mut remaining = input;
-    let mut messages = vec![];
+    let mut messages = Vec::new();
 
     while !remaining.is_empty() {
         let (local_remaining, message) = parse_string(remaining)?;
 
         let (local_remaining, nb_args_bytes) = take(1usize)(local_remaining)?;
 
+        // NB-ARGS is a single byte, so this is bounded by 255.
         let nb_args = nb_args_bytes[0] as usize;
 
-        let mut parser = many_m_n(nb_args, nb_args, parse_key_value_pair);
-        let (local_remaining, kv_list) = parser.parse(local_remaining)?;
+        let mut map = HashMap::with_capacity(nb_args);
         remaining = local_remaining;
 
-        let mut map = HashMap::new();
+        for _ in 0..nb_args {
+            let (rest, (key, value)) = parse_key_value_pair(remaining)?;
+            remaining = rest;
 
-        // handle duplicate keys
-        for (key, value) in kv_list {
-            if map.contains_key(&key) {
+            // handle duplicate keys
+            if map.insert(key, value).is_some() {
                 return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
             }
-            map.insert(key, value);
         }
 
         messages.push(Message {
@@ -262,6 +290,56 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// A frame body of 0..=4 bytes used to leave the decoder wedged: the length check passed but
+    /// the streaming `be_u8`/`be_u32` reported `Incomplete`, which the codec mapped to
+    /// `Ok(None)` without consuming anything, so the same bytes were re-parsed forever.
+    #[test]
+    fn test_short_frame_body_errors_instead_of_stalling() {
+        for declared_len in 0u32..=4 {
+            let mut input = declared_len.to_be_bytes().to_vec();
+            input.extend(std::iter::repeat_n(0x03, declared_len as usize));
+
+            let result = parse_frame(&input);
+
+            assert!(
+                !matches!(result, Err(nom::Err::Incomplete(_))),
+                "frame_length {declared_len} must not report Incomplete when all \
+                 {declared_len} declared bytes are present"
+            );
+            assert!(
+                result.is_err(),
+                "frame_length {declared_len} is malformed and must be rejected"
+            );
+        }
+    }
+
+    /// The frame length prefix is attacker-controlled, so an absurd value must be rejected up
+    /// front rather than making the framed reader buffer toward 4 GiB.
+    #[test]
+    fn test_oversized_frame_length_is_rejected() {
+        let input = u32::MAX.to_be_bytes();
+        assert!(matches!(
+            parse_frame(&input),
+            Err(nom::Err::Failure(_) | nom::Err::Error(_))
+        ));
+
+        // Just past the ceiling is rejected too, and not as Incomplete.
+        let input = (MAX_FRAME_SIZE_LIMIT + 1).to_be_bytes();
+        assert!(!matches!(
+            parse_frame(&input),
+            Err(nom::Err::Incomplete(_)) | Ok(_)
+        ));
+    }
+
+    /// A truncated length prefix is the one place `Incomplete` is still correct.
+    #[test]
+    fn test_truncated_length_prefix_is_incomplete() {
+        assert!(matches!(
+            parse_frame(&[0x00, 0x00, 0x00]),
+            Err(nom::Err::Incomplete(_))
+        ));
+    }
 
     #[rustfmt::skip]
     const HAPROXY_HELLO: &[u8] = &[
