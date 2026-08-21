@@ -15,6 +15,12 @@ on:
     branches:
       - '*'
 
+# Restrict the default GITHUB_TOKEN for every job below. All of them only check out and build,
+# so read access to the repository contents is the whole requirement. Without this the token
+# inherits the repository or organisation default, which may still be read-write.
+permissions:
+  contents: read
+
 jobs:
   format:
     name: Format

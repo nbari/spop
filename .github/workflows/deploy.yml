@@ -7,8 +7,9 @@ on:
       - '*'
   workflow_dispatch:
 
+# Read by default; the two jobs that actually create release assets opt into write below.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -19,6 +20,9 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    # Creates the GitHub Release.
+    permissions:
+      contents: write
     needs:
       - test
     outputs:
@@ -96,6 +100,9 @@ jobs:
   build-source-archive:
     name: Build Source Archive
     runs-on: ubuntu-latest
+    # Uploads the source archives onto the release.
+    permissions:
+      contents: write
     needs:
       - test
       - create-release
@@ -138,6 +145,9 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    # Authenticates to crates.io with CRATES_TOKEN; needs no repository write access.
+    permissions:
+      contents: read
     needs:
       - test
       - create-release

@@ -112,6 +112,12 @@ Changelog
   `varint::encode_varint_into` with a buffer you already own
 
 ### Notes
+- Restricted the `GITHUB_TOKEN` in both workflows, closing all five open CodeQL
+  `actions/missing-workflow-permissions` alerts. `test.yml` gets one workflow-level
+  `contents: read`, since every job there only checks out and builds. `deploy.yml` was not
+  flagged — it already set `contents: write` at the root — but that granted write to every job
+  including the crates.io publish, so it now reads by default and only the two jobs that create
+  release assets opt into write
 - Fixed the release workflow's changelog extraction. `awk "/## $VERSION/,/^## /"` never worked:
   the range's start line also matches its end pattern, so the range closed immediately and every
   GitHub release fell back to the literal text "Release version X" instead of the changelog
