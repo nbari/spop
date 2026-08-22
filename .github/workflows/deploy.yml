@@ -29,7 +29,7 @@ jobs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -66,7 +66,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ steps.get_version.outputs.version }}
           body: |
@@ -108,7 +108,7 @@ jobs:
       - create-release
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Create source archive
         run: |
@@ -134,7 +134,7 @@ jobs:
           ls -lh ${ARCHIVE_NAME}.*
 
       - name: Upload source archives
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             spop-${{ needs.create-release.outputs.version }}-source.tar.gz
@@ -153,7 +153,7 @@ jobs:
       - create-release
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
