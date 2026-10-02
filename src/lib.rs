@@ -52,6 +52,13 @@ use std::borrow::Cow;
 /// gives the value both peers actually settled on, and
 /// [`crate::SpopCodec::set_max_frame_size`] applies it.
 ///
+/// Calling it matters for decoded memory too, not just buffered bytes. A decoded frame is
+/// larger than its wire form: on a typical 64-bit build every argument becomes an owned
+/// `String` name plus a [`TypedData`], about 56 bytes, from as little as 2 bytes on the wire.
+/// Argument storage for a hostile frame of minimal arguments can therefore approach 28 times
+/// the frame size, about 29 MB at this limit against about 450 KB at the usual negotiated
+/// 16380. The exact total also depends on the number of messages and on collection capacity.
+///
 /// `HAProxy` does the same thing with a tighter default: it starts a connection at
 /// `tune.bufsize - 4` and narrows to the negotiated value once AGENT-HELLO arrives (see
 /// `spop_conn->max_frame_size` in `src/mux_spop.c`). This crate cannot know the peer's
@@ -388,7 +395,7 @@ mod tests {
 
         let bytes = frame.serialize().expect("serialize");
         let (rest, parsed) = parser::parse_frame(&bytes).expect("parse");
-        assert!(rest.is_empty());
+        assert_eq!(rest, []);
         assert_eq!(*parsed.frame_type(), FrameType::HaproxyHello);
 
         let FramePayload::KVList(kv) = parsed.payload() else {

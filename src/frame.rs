@@ -150,7 +150,28 @@ pub enum FramePayload<'a> {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub name: String,
-    pub args: HashMap<String, TypedData>,
+
+    /// The arguments, in the order they are declared in the `spoe-message` section, which is
+    /// the order `HAProxy` sends them.
+    ///
+    /// Argument names are optional (`args [name=]<sample> ...`), so a name may be empty and
+    /// may repeat: `args frontend=fe_id src dst` arrives as `("frontend", ..)`, `("", ..)`,
+    /// `("", ..)`. Use [`Message::get`] to look one up by name.
+    pub args: Vec<(String, TypedData)>,
+}
+
+impl Message {
+    /// Returns the value of the first argument named `name`.
+    ///
+    /// Messages carry at most 255 arguments (NB-ARGS is one byte), and usually a handful, so
+    /// this is a linear scan.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&TypedData> {
+        self.args
+            .iter()
+            .find(|(arg_name, _)| arg_name == name)
+            .map(|(_, value)| value)
+    }
 }
 
 /// Flags are a 32 bits field. They are encoded on 4 bytes in network byte

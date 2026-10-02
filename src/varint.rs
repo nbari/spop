@@ -134,7 +134,7 @@ mod tests {
 
         let (rest, decoded) = decode_varint(&encoded).expect("u64::MAX must round-trip");
         assert_eq!(decoded, u64::MAX);
-        assert!(rest.is_empty());
+        assert_eq!(rest, []);
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
             let (remaining_input, decoded) =
                 decode_varint(&encoded).expect("Failed to decode varint");
             assert_eq!(i, decoded, "Failed for value: {i}");
-            assert!(remaining_input.is_empty());
+            assert_eq!(remaining_input, []);
         }
     }
 }

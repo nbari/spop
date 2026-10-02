@@ -243,9 +243,11 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
 
     let (input, bytes) = take(length)(input)?;
 
-    String::from_utf8(bytes.to_vec())
-        .map(|s| (input, s))
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+    // Lossy, like STRING values in `typed_data`. Argument names (`args <name>=<sample>`) are
+    // copied from the configuration without any character check, so a strict conversion
+    // turned one odd name into a frame error and a dropped connection. `HAProxy` does validate
+    // `spoe-message` names, but they share this decoder, as do KV-LIST keys.
+    Ok((input, String::from_utf8_lossy(bytes).into_owned()))
 }
 
 /// Parse entire list of messages payload
@@ -264,23 +266,26 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 
         // NB-ARGS is a single byte, so this is bounded by 255.
         let nb_args = nb_args_bytes[0] as usize;
-
-        let mut map = HashMap::with_capacity(nb_args);
         remaining = local_remaining;
 
-        for _ in 0..nb_args {
-            let (rest, (key, value)) = parse_key_value_pair(remaining)?;
-            remaining = rest;
+        // Duplicate names are legitimate here, unlike in a KV-LIST: argument names are
+        // optional, and `HAProxy` sends every unnamed argument with an empty name, so
+        // `args src dst` arrives as two arguments both named "".
+        //
+        // NB-ARGS is untrusted, and every argument takes at least two bytes (a name length and
+        // a type), so capping the capacity by what is left keeps a forged count from making
+        // the parser allocate for arguments that cannot be there.
+        let mut args = Vec::with_capacity(nb_args.min(remaining.len() / 2));
 
-            // handle duplicate keys
-            if map.insert(key, value).is_some() {
-                return Err(nom::Err::Failure(Error::new(input, ErrorKind::Tag)));
-            }
+        for _ in 0..nb_args {
+            let (rest, arg) = parse_key_value_pair(remaining)?;
+            remaining = rest;
+            args.push(arg);
         }
 
         messages.push(Message {
             name: message,
-            args: map,
+            args,
         });
     }
     Ok((remaining, messages))
@@ -290,6 +295,7 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     /// A frame body of 0..=4 bytes used to leave the decoder wedged: the length check passed but
     /// the streaming `be_u8`/`be_u32` reported `Incomplete`, which the codec mapped to
@@ -512,7 +518,7 @@ mod tests {
     #[test]
     fn test_parse_notify_no_messages() {
         let frame: &[u8] = &[
-            0x00, 0x00, 0x00, 0x07, // FRAME-LENGTH = 8 bytes
+            0x00, 0x00, 0x00, 0x07, // FRAME-LENGTH = 7 bytes
             0x03, // FRAME-TYPE: NOTIFY
             0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
             0x01, // STREAM-ID = 1
@@ -564,6 +570,138 @@ mod tests {
                 panic!("Expected a Messages payload, but got a different type");
             }
         }
+    }
+
+    /// Prefixes a frame body with its 4-byte length.
+    fn framed(body: &[u8]) -> Vec<u8> {
+        let mut frame = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+        frame.extend_from_slice(body);
+        frame
+    }
+
+    /// Returns the only message of a parsed NOTIFY frame.
+    fn single_message(frame: &[u8]) -> Message {
+        let (rest, parsed) = parse_frame(frame).expect("Parses correctly");
+        assert_eq!(rest, []);
+
+        let FramePayload::ListOfMessages(messages) = parsed.payload() else {
+            panic!("Expected a Messages payload, but got a different type");
+        };
+        assert_eq!(messages.len(), 1, "Expected one message");
+        messages.first().cloned().expect("one message")
+    }
+
+    /// Argument names are optional (`args [name=]<sample>`), and `HAProxy` sends each unnamed
+    /// argument with an empty name. This is what `args frontend=fe_id src dst` -- the example in
+    /// SPOE.txt -- puts on the wire. It used to be rejected as a duplicate key, failing the
+    /// whole frame and dropping the connection.
+    #[test]
+    fn test_parse_notify_unnamed_args() {
+        #[rustfmt::skip]
+        let body: &[u8] = &[
+            0x03,                   // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01,                   // STREAM-ID = 1
+            0x01,                   // FRAME-ID = 1
+            0x04,                   // message name: "msg1"
+                0x6d, 0x73, 0x67, 0x31,
+            0x03,                   // NB-ARGS = 3
+            0x08,                   // arg name: "frontend"
+                0x66, 0x72, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x64,
+            0x04, 0x01,             // TYPE=INT64, 1 (fe_id)
+            0x00,                   // arg name: "" (src)
+            0x06, 192, 0, 2, 1,     // TYPE=IPV4, 192.0.2.1
+            0x00,                   // arg name: "" (dst)
+            0x06, 198, 51, 100, 7,  // TYPE=IPV4, 198.51.100.7
+        ];
+
+        let message = single_message(&framed(body));
+        assert_eq!(message.name, "msg1");
+
+        // Declaration order is preserved, which is the only way to tell unnamed args apart.
+        assert_eq!(
+            message.args,
+            vec![
+                ("frontend".to_string(), TypedData::Int64(1)),
+                (String::new(), TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1))),
+                (
+                    String::new(),
+                    TypedData::IPv4(Ipv4Addr::new(198, 51, 100, 7))
+                ),
+            ]
+        );
+
+        assert_eq!(message.get("frontend"), Some(&TypedData::Int64(1)));
+        assert_eq!(message.get("missing"), None);
+    }
+
+    /// A repeated name is passed through as sent rather than rejected or collapsed;
+    /// `Message::get` returns the first.
+    #[test]
+    fn test_parse_notify_repeated_named_args() {
+        #[rustfmt::skip]
+        let body: &[u8] = &[
+            0x03,                   // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01,                   // STREAM-ID = 1
+            0x01,                   // FRAME-ID = 1
+            0x04,                   // message name: "msg1"
+                0x6d, 0x73, 0x67, 0x31,
+            0x02,                   // NB-ARGS = 2
+            0x02, 0x69, 0x70,       // arg name: "ip"
+            0x06, 192, 0, 2, 1,     // TYPE=IPV4, 192.0.2.1
+            0x02, 0x69, 0x70,       // arg name: "ip"
+            0x06, 198, 51, 100, 7,  // TYPE=IPV4, 198.51.100.7
+        ];
+
+        let message = single_message(&framed(body));
+        assert_eq!(message.args.len(), 2);
+        assert_eq!(
+            message.get("ip"),
+            Some(&TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
+        );
+    }
+
+    /// `HAProxy` accepts any bytes in an argument name (`args bad\xff=src` passes `haproxy -c`),
+    /// and a strict UTF-8 check used to fail the whole frame over it.
+    #[test]
+    fn test_parse_notify_non_utf8_arg_name() {
+        #[rustfmt::skip]
+        let body: &[u8] = &[
+            0x03,                   // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01,                   // STREAM-ID = 1
+            0x01,                   // FRAME-ID = 1
+            0x04,                   // message name: "msg1"
+                0x6d, 0x73, 0x67, 0x31,
+            0x01,                   // NB-ARGS = 1
+            0x04,                   // arg name: "bad\xff"
+                0x62, 0x61, 0x64, 0xff,
+            0x06, 192, 0, 2, 1,     // TYPE=IPV4, 192.0.2.1
+        ];
+
+        let message = single_message(&framed(body));
+        assert_eq!(
+            message.get("bad\u{FFFD}"),
+            Some(&TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
+        );
+    }
+
+    /// NB-ARGS is untrusted: claiming 255 arguments with none present must fail cleanly.
+    #[test]
+    fn test_parse_notify_nb_args_larger_than_payload() {
+        #[rustfmt::skip]
+        let body: &[u8] = &[
+            0x03,                   // FRAME-TYPE: NOTIFY
+            0x00, 0x00, 0x00, 0x01, // FLAGS = FIN
+            0x01,                   // STREAM-ID = 1
+            0x01,                   // FRAME-ID = 1
+            0x04,                   // message name: "msg1"
+                0x6d, 0x73, 0x67, 0x31,
+            0xff,                   // NB-ARGS = 255, but no arguments follow
+        ];
+
+        assert!(parse_frame(&framed(body)).is_err());
     }
 
     // Test that a NOTIFY frame with a message that is too short fails to parse.

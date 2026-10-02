@@ -43,6 +43,14 @@ logs:
 test:
     curl -v http://0:5000 -H "CF-IPCountry: xx"
 
+# Run both example agents against a real HAProxy container and check their replies. CI runs
+# this for every supported HAProxy branch; set CONTAINER_ENGINE=docker to use docker.
+#
+#   just integration         # haproxy:latest
+#   just integration 3.2
+integration HAPROXY_VERSION='latest':
+    HAPROXY_VERSION={{HAPROXY_VERSION}} bash scripts/integration.sh
+
 # Attach to the running container for debugging
 shell:
     podman exec -it {{CONTAINER_NAME}} bash

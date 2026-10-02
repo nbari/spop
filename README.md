@@ -102,6 +102,44 @@ The repository currently defines two SPOE engines:
 - `test`: TCP backend `127.0.0.1:12345`
 - `test-socket`: UNIX socket backend `/var/run/haproxy/spoa.sock`
 
+### Integration test
+
+`scripts/integration.sh` runs the whole loop unattended: it starts both agents, runs the official
+HAProxy image with `haproxy.cfg` and `spoe-test.conf`, and checks that a response carries the
+variable each agent set. It fails if either agent could not decode a frame.
+
+```bash
+just integration        # haproxy:latest
+just integration 3.2    # any haproxy image tag
+```
+
+It uses podman by default; set `CONTAINER_ENGINE=docker` to use docker. It needs Linux, because
+HAProxy reaches the agents through host networking. CI runs it against HAProxy 3.2 and 3.4.
+
+## Reading message arguments
+
+A NOTIFY frame carries a list of messages, and each message keeps its arguments in declaration
+order. Argument names are optional in `spoe-message` (`args [name=]<sample> ...`), so a name can
+be empty or repeated:
+
+```rust
+use spop::{TypedData, frame::Message};
+
+fn handle(message: &Message) {
+    // First argument with this name.
+    if let Some(TypedData::String(country)) = message.get("country") {
+        println!("country: {country}");
+    }
+
+    // Unnamed arguments, by position.
+    for (name, value) in &message.args {
+        if name.is_empty() {
+            println!("unnamed: {value:?}");
+        }
+    }
+}
+```
+
 ## Example
 
 ```conf
@@ -130,12 +168,26 @@ frontend main
     default_backend app
 
 backend spoe-test
-    mode tcp
-    server rust-agent 127.0.0.1:12345
+    # "mode spop" is mandatory for backends holding SPOA servers; "mode tcp" is only
+    # auto-converted.
+    mode spop
+
+    # Health-check with a real SPOP HELLO handshake rather than a bare TCP connect.
+    option spop-check
+
+    timeout connect 5s
+    timeout server  3m
+
+    server rust-agent 127.0.0.1:12345 check
 
 backend spoe-test-socket
-    mode tcp
-    server local-agent unix@/var/run/haproxy/spoa.sock
+    mode spop
+    option spop-check
+
+    timeout connect 5s
+    timeout server  3m
+
+    server local-agent unix@/var/run/haproxy/spoa.sock check
 
 backend app
     mode http
@@ -158,8 +210,9 @@ spoe-message check-client-ip
     args ip=src
     event on-client-session
 
+# Argument names are optional: src and dst arrive unnamed (empty name), in this order.
 spoe-message log-request
-    args ip=src country=hdr(CF-IPCountry) user_agent=hdr(User-Agent)
+    args ip=src country=hdr(CF-IPCountry) user_agent=hdr(User-Agent) src dst
     event on-frontend-http-request
 
 [test-socket]
@@ -170,4 +223,13 @@ spoe-agent test-socket
     timeout     processing 10ms
     use-backend spoe-test-socket
     log         global
+
+# Each [scope] is self-contained, so the messages are declared again here.
+spoe-message check-client-ip
+    args ip=src
+    event on-client-session
+
+spoe-message log-request
+    args ip=src country=hdr(CF-IPCountry) user_agent=hdr(User-Agent) src dst
+    event on-frontend-http-request
 ```

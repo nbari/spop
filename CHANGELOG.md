@@ -1,6 +1,59 @@
 Changelog
 =========
 
+## 0.13.0 - 2026-10-02
+
+### Fixed
+- Accept NOTIFY messages with unnamed arguments. Argument names are optional in `spoe-message`
+  (`args [name=]<sample> ...`; SPOE.txt's own example is `args frontend=fe_id src dst`), and
+  `HAProxy` sends every unnamed argument with an empty name. Two or more of them used to be
+  rejected as duplicate keys, so the frame failed to decode and the agent lost its connection.
+  Reproduced against HAProxy 3.2.25 and 3.4.6
+- Accept argument names that are not valid UTF-8. `HAProxy` copies them from the configuration
+  without any character check, and a strict conversion failed the whole frame. Names are now
+  decoded lossily, the same way STRING values already were. The decoder is shared, so message
+  names and KV-LIST keys are decoded lossily too
+- Codec errors no longer embed the read buffer. The message was `{e:?}` of the nom error, which
+  prints the rest of the buffered input byte by byte, so an invalid frame of up to
+  `max_frame_size` (1 MiB before the handshake) produced an error string several times that
+  size. It now reports the error kind and byte offset, e.g. `Failed to parse frame: Alt at byte 4`
+
+### Changed
+- **Breaking:** `Message.args` is now `Vec<(String, TypedData)>` instead of
+  `HashMap<String, TypedData>`, in declaration order, which is the only way to tell unnamed
+  arguments apart. To migrate, replace `message.args.get("name")` and `message.args["name"]` with
+  `message.get("name")`, which returns an `Option`; `for (name, value) in &message.args`, `len()`
+  and `is_empty()` keep compiling. KV-LIST payloads (HELLO, DISCONNECT) are unchanged
+- Repeated argument names are kept, in order, where 0.12.0 rejected the whole frame and dropped
+  the connection. `Message::get` returns the first
+- Decoding a NOTIFY no longer builds a hash map per message: no hashing of argument names, and
+  the arguments are stored in a `Vec` sized exactly instead of an over-allocated hash table. The
+  number of allocations per frame is unchanged; each allocates less. Measured against 0.12.0 on a
+  NOTIFY carrying `log-request` with three string arguments, and the ACK answering it:
+
+  | | 0.12.0 | 0.13.0 |
+  |---|---|---|
+  | full loop through `SpopCodec` | ~439 ns | ~363 ns |
+  | `parse_frame` | ~301 ns | ~230 ns |
+  | decode through `SpopCodec` | ~315 ns | ~246 ns |
+  | bytes allocated per `parse_frame`, 1 / 3 arguments | 602 / 631 | 318 / 459 |
+
+  The encode path is unchanged. As before, treat the timings as indicative: they come from one
+  run on one machine
+
+### Added
+- `Message::get`, which returns the first argument with a given name
+- `scripts/integration.sh` and `just integration [VERSION]`: both example agents behind the
+  official HAProxy image, checking that a response carries the variable each agent set. CI runs
+  it against HAProxy 3.2 and 3.4
+
+### Internal
+- Fix the tests for clippy's new `assert_is_empty` lint (Rust 1.99), which failed the build
+- The README example uses `mode spop` and `option spop-check`, matching `haproxy.cfg`, and now
+  declares the messages in its `[test-socket]` scope, without which `haproxy -c` rejected it
+- `MAX_FRAME_SIZE_LIMIT` documents how much larger a decoded frame can be than its wire form,
+  another reason to call `SpopCodec::set_max_frame_size` after the handshake
+
 ## 0.12.0 - 2026-08-21
 
 ### Fixed

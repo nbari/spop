@@ -85,3 +85,27 @@ jobs:
 
       - name: test
         run: cargo test
+
+  # End-to-end against the real thing: both example agents behind the official HAProxy image,
+  # driven by haproxy.cfg and spoe-test.conf. Unit tests only prove the crate agrees with its own
+  # reading of SPOE.txt; this catches an HAProxy release that reads it differently.
+  integration:
+    name: HAProxy ${{ matrix.haproxy }}
+    strategy:
+      fail-fast: false
+      matrix:
+        haproxy:
+          - '3.2'
+          - '3.4'
+    runs-on: ubuntu-latest
+    needs:
+      - check
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Integration
+        env:
+          CONTAINER_ENGINE: docker
+          HAPROXY_VERSION: ${{ matrix.haproxy }}
+        run: bash scripts/integration.sh

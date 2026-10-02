@@ -8,7 +8,7 @@ thread_local! {
     /// Scratch buffer for frame serialization, reused across frames on this thread.
     ///
     /// Writing a frame is a long run of small writes, and those are markedly cheaper on
-    /// `Vec<u8>` than through `BufMut` on `BytesMut` — measured at ~30%% for a 4 KB frame.
+    /// `Vec<u8>` than through `BufMut` on `BytesMut` — measured at ~30% for a 4 KB frame.
     /// Staging into a reused `Vec` and handing the result over as one `put_slice` is both
     /// faster than writing into the `BytesMut` a byte at a time and allocation-free once warm,
     /// unlike `serialize()`, which allocates a fresh `Vec` every call.
@@ -90,11 +90,21 @@ impl Decoder for SpopCodec {
 
             Err(nom::Err::Incomplete(_)) => Ok(None),
 
-            Err(e) => {
-                // Return a generic io::Error, including the error message from nom::Err
+            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
+                // Never format `e` itself. Its `input` is a slice of the read buffer, and
+                // `{e:?}` prints it byte by byte as decimal: an invalid frame of up to
+                // `max_frame_size` (1 MiB before the handshake) turned into an error message
+                // several times that size, which agents then log. The kind and where it
+                // happened are what is useful.
+                //
+                // `e.input` is not always a suffix of `src` (errors inside a frame body point
+                // into a slice that ends at the frame boundary), so the offset comes from the
+                // addresses rather than from the remaining length.
+                let offset = e.input.as_ptr().addr().saturating_sub(src.as_ptr().addr());
+
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("Failed to parse frame: {e:?}"),
+                    format!("Failed to parse frame: {:?} at byte {offset}", e.code),
                 ))
             }
         }
@@ -232,5 +242,29 @@ mod tests {
         // Either way the buffer must not be left untouched-and-silently-pending: a malformed
         // frame is an error, never `Ok(None)`.
         assert!(!src.is_empty());
+    }
+
+    /// The error used to be `format!("{e:?}")` of the nom error, which prints the rest of the
+    /// read buffer byte by byte: a 64 KiB invalid frame made an error message of ~300 KB.
+    #[test]
+    fn test_error_message_does_not_embed_the_input() {
+        let mut codec = SpopCodec::default();
+        let mut src = frame_declaring(64 * 1024);
+
+        let err = codec.decode(&mut src).expect_err("frame type 0 is invalid");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let message = err.to_string();
+        assert!(
+            message.len() < 200,
+            "error message is {} bytes: {message:.200}",
+            message.len()
+        );
+
+        // The frame type is the byte right after the 4-byte length prefix.
+        assert!(
+            message.ends_with("at byte 4"),
+            "unexpected message: {message}"
+        );
     }
 }
