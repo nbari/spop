@@ -86,7 +86,7 @@ jobs:
       - name: test
         run: cargo test
 
-  # End-to-end against the real thing: both example agents behind the official HAProxy image,
+  # End-to-end against the real thing: the three example agents behind the official HAProxy image,
   # driven by haproxy.cfg and spoe-test.conf. Unit tests only prove the crate agrees with its own
   # reading of SPOE.txt; this catches an HAProxy release that reads it differently.
   integration:

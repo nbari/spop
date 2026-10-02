@@ -28,10 +28,13 @@ cargo check --examples
 
 ### Manual integration testing
 
-This repository includes two runnable agents:
+This repository includes three runnable agents:
 
 - `agent_tcp`: listens on `0.0.0.0:12345`
 - `agent_socket`: listens on `spoa_agent/spoa.sock`
+- `agent_args`: listens on `127.0.0.1:12346` and reads its message arguments back: unnamed
+  arguments by position, a repeated name through `Message::get`, and a name that is not valid
+  UTF-8. Start here to see how to read what HAProxy sends
 
 Run one of them directly with Cargo:
 
@@ -43,11 +46,16 @@ cargo run --example agent_tcp
 cargo run --example agent_socket
 ```
 
+```bash
+cargo run --example agent_args
+```
+
 If you prefer autoreload during development, the helper recipes are:
 
 ```bash
 just agent_tcp
 just agent_socket
+just agent_args
 ```
 
 These recipes require `cargo-watch`.
@@ -97,16 +105,20 @@ The current HAProxy configuration is in `haproxy.cfg`, and the current SPOE conf
 
 ### Current test topology
 
-The repository currently defines two SPOE engines:
+The repository currently defines three SPOE engines:
 
 - `test`: TCP backend `127.0.0.1:12345`
 - `test-socket`: UNIX socket backend `/var/run/haproxy/spoa.sock`
+- `args`: TCP backend `127.0.0.1:12346`, sending the `echo-args` message to `agent_args`. Its
+  summary of what it decoded comes back in the `X-SPOE-ARGS` response header
 
 ### Integration test
 
-`scripts/integration.sh` runs the whole loop unattended: it starts both agents, runs the official
-HAProxy image with `haproxy.cfg` and `spoe-test.conf`, and checks that a response carries the
-variable each agent set. It fails if either agent could not decode a frame.
+`scripts/integration.sh` runs the whole loop unattended: it starts the three agents, runs the
+official HAProxy image with `haproxy.cfg` and `spoe-test.conf`, and checks that a response carries
+the variables they set, including `agent_args`' summary of every argument it decoded. It fails if
+any agent could not decode a frame. Last, it sends `agent_args` a malformed frame and checks that
+the decode error names the problem and its offset without dumping the frame.
 
 ```bash
 just integration        # haproxy:latest

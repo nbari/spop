@@ -43,7 +43,7 @@ logs:
 test:
     curl -v http://0:5000 -H "CF-IPCountry: xx"
 
-# Run both example agents against a real HAProxy container and check their replies. CI runs
+# Run the three example agents against a real HAProxy container and check their replies. CI runs
 # this for every supported HAProxy branch; set CONTAINER_ENGINE=docker to use docker.
 #
 #   just integration         # haproxy:latest
@@ -70,6 +70,9 @@ agent_socket:
 
 agent_tcp:
   cargo watch --ignore spoa_agent/ -x 'run --example agent_tcp'
+
+agent_args:
+  cargo watch --ignore spoa_agent/ -x 'run --example agent_args'
 
 # Run the benchmarks
 bench:

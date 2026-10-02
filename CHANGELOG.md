@@ -1,6 +1,26 @@
 Changelog
 =========
 
+## 0.13.1 - 2026-10-02
+
+### Added
+- `examples/agent_args.rs`, an agent that reads its message arguments back: unnamed arguments by
+  position, a repeated name through `Message::get` and a name that is not valid UTF-8. A new
+  `args` SPOE engine in `haproxy.cfg` and `spoe-test.conf` drives it, and `scripts/integration.sh`
+  checks its summary of every decoded argument against what HAProxy was configured to send. The
+  script also sends it a malformed frame and checks the decode error stays short
+
+### Changed
+- `agent_tcp` and `agent_socket` log frame errors with `{e}` instead of `{e:?}`, so they print
+  the short message (`Failed to parse frame: Alt at byte 4`) rather than wrapping it in
+  `Custom { kind: InvalidData, error: ... }`
+
+### Internal
+- `scripts/integration.sh` compares response header values exactly; only header names are
+  matched case-insensitively. Values that differed only in case used to pass
+- `scripts/integration.sh` deletes its temporary log directory after a passing run and keeps it,
+  printing its path, after a failure
+
 ## 0.13.0 - 2026-10-02
 
 ### Fixed

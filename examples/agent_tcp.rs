@@ -61,7 +61,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                 break;
             }
             Err(e) => {
-                eprintln!("Frame read error: {e:?}");
+                eprintln!("Frame read error: {e}");
                 break;
             }
         };
