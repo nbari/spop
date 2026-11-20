@@ -118,6 +118,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-unknown-linux-musl
+      - name: Install the C compiler for musl build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
       - name: Run 32-bit tests
         run: |
           export CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_LINKER="$(dirname "$(rustc --print target-libdir)")/bin/rust-lld"
