@@ -128,7 +128,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                     let mut ack = Ack::new(frame.metadata().stream_id, frame.metadata().frame_id);
 
                     for message in *messages {
-                        match message.name.as_str() {
+                        match message.name() {
                             "check-client-ip" => {
                                 let random_value: u32 = rand::random_range(0..100);
                                 ack = ack.set_var(VarScope::Session, "ip_score", random_value);
@@ -139,7 +139,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                             }
 
                             _ => {
-                                eprintln!("Unsupported message: {:?}", message.name);
+                                eprintln!("Unsupported message: {:?}", message.name());
                             }
                         }
                     }

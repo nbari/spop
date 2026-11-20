@@ -19,7 +19,7 @@ pub mod status;
 pub use self::status::StatusCode;
 
 pub mod types;
-pub use self::types::TypedData;
+pub use self::types::{TypedData, TypedDataRef};
 
 pub mod varint;
 pub use self::varint::{decode_varint, encode_varint_into, varint_len};

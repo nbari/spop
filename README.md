@@ -135,22 +135,29 @@ order. Argument names are optional in `spoe-message` (`args [name=]<sample> ...`
 be empty or repeated:
 
 ```rust
-use spop::{TypedData, frame::Message};
+use spop::{TypedData, TypedDataRef, frame::Message};
 
 fn handle(message: &Message) {
     // First argument with this name.
-    if let Some(TypedData::String(country)) = message.get("country") {
+    if let Some(TypedDataRef::String(country)) = message.get("country") {
         println!("country: {country}");
     }
 
     // Unnamed arguments, by position.
-    for (name, value) in &message.args {
+    for (name, value) in message.args() {
         if name.is_empty() {
             println!("unnamed: {value:?}");
         }
     }
+
+    // Values borrow from the frame they arrived in; copy one out to keep it longer.
+    let path: Option<TypedData> = message.get("path").map(TypedData::from);
+    println!("path: {path:?}");
 }
 ```
+
+Names and values are not copied out of the frame: they point into it, and the message keeps the
+frame alive until it is dropped.
 
 ## Example
 
