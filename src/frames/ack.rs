@@ -47,7 +47,20 @@ impl Ack {
         self
     }
 
-    // Adds an unset-var action to the ACK frame
+    /// Adds a set-var action without allocating its name or value.
+    #[must_use]
+    pub fn set_var_static(
+        mut self,
+        scope: VarScope,
+        name: &'static str,
+        value: crate::TypedDataRef<'static>,
+    ) -> Self {
+        self.actions
+            .push(Action::SetVarStatic { scope, name, value });
+        self
+    }
+
+    /// Adds an unset-var action to the ACK frame
     #[must_use]
     pub fn unset_var(mut self, scope: VarScope, name: &str) -> Self {
         self.actions.push(Action::UnSetVar {

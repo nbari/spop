@@ -9,9 +9,10 @@ use std::{fmt, iter::FusedIterator, slice};
 /// ```
 ///
 /// A decoded message keeps the frame it arrived in and points into it: its name, its argument
-/// names and its STRING and BINARY values are read from there, so decoding copies none of them.
-/// The flip side is that a message keeps its whole frame (at most the negotiated max-frame-size)
-/// alive while it exists. Copy out what you keep for longer with [`TypedDataRef::into_owned`].
+/// names, valid STRING values and BINARY values are read from there. Invalid UTF-8 text
+/// needs a separate allocation for its replacement characters.
+/// A message can keep the entire socket read allocation alive, including capacity shared with
+/// other frames. Use [`TypedDataRef::into_owned`] for individual values that outlive it.
 #[derive(Clone)]
 pub struct Message {
     /// The bytes that `name` and `args` point into.
@@ -57,7 +58,21 @@ impl Message {
             })
             .collect();
         let name = slicer.text(at(0, name.len()));
-        slicer.message(name, message_args)
+        let mut message = Slicer::message(name, message_args);
+        message.attach(buf);
+        message
+    }
+
+    /// Validate every text range against its final, immutable owner before exposing it.
+    pub(crate) fn attach(&mut self, body: Bytes) {
+        self.name.validate(&body);
+        for arg in &mut self.args {
+            arg.name.validate(&body);
+            if let Value::String(text) = &mut arg.value {
+                text.validate(&body);
+            }
+        }
+        self.buf = body;
     }
 
     /// The message name, as declared by `spoe-message`.
@@ -138,17 +153,17 @@ impl fmt::Debug for Args<'_> {
 
 /// Builds messages whose names and values point into `buf`.
 pub(crate) struct Slicer<'a> {
-    buf: &'a Bytes,
+    buf: &'a [u8],
 }
 
 impl<'a> Slicer<'a> {
-    pub(crate) fn new(buf: &'a Bytes) -> Self {
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
         Self { buf }
     }
 
-    pub(crate) fn message(&self, name: Text, args: Vec<Arg>) -> Message {
+    pub(crate) fn message(name: Text, args: Vec<Arg>) -> Message {
         Message {
-            buf: self.buf.clone(),
+            buf: Bytes::new(),
             name,
             args,
         }
@@ -167,17 +182,9 @@ impl<'a> Slicer<'a> {
         }
     }
 
-    /// Text from `data`, a slice of `buf`. Invalid UTF-8 is replaced by U+FFFD, which takes a
-    /// copy.
+    /// Record a text range. Attaching the body validates it and replaces invalid UTF-8.
     pub(crate) fn text(&self, data: &[u8]) -> Text {
-        let span = self.span(data);
-        // Validate what `resolve` will read, not `data`: this check is what makes the
-        // `from_utf8_unchecked` there sound.
-        if std::str::from_utf8(span.slice(self.buf)).is_ok() {
-            Text::Span(span)
-        } else {
-            Text::Replaced(String::from_utf8_lossy(data).into())
-        }
+        Text::Span(self.span(data))
     }
 
     fn span(&self, data: &[u8]) -> Span {
@@ -209,18 +216,25 @@ impl Span {
 
 #[derive(Clone)]
 pub(crate) enum Text {
-    /// Only [`Slicer::text`] creates this, after checking that the range is valid UTF-8.
+    /// Relative to the body. Checked before the body is attached.
     Span(Span),
     /// The input was not valid UTF-8.
     Replaced(Box<str>),
 }
 
 impl Text {
+    fn validate(&mut self, body: &[u8]) {
+        let Self::Span(span) = self else { return };
+        let bytes = span.slice(body);
+        if std::str::from_utf8(bytes).is_err() {
+            *self = Self::Replaced(String::from_utf8_lossy(bytes).into());
+        }
+    }
+
     fn resolve<'a>(&'a self, buf: &'a [u8]) -> &'a str {
         match self {
-            // SAFETY: `Slicer::text`, the only constructor of `Text::Span`, checked that this
-            // range of the message's buffer is valid UTF-8, and `Bytes` never changes. The
-            // fallback of `Span::slice` is empty, which is valid UTF-8 too.
+            // SAFETY: Message::attach validates each range against this immutable Bytes
+            // before installing it. An unattached message resolves spans against an empty slice.
             Self::Span(span) => unsafe { std::str::from_utf8_unchecked(span.slice(buf)) },
             Self::Replaced(text) => text,
         }
@@ -292,7 +306,7 @@ mod tests {
     fn invalid_utf8_is_replaced() {
         let buf = Bytes::from_static(b"ok\xffbad");
         let slicer = Slicer::new(&buf);
-        let message = slicer.message(
+        let mut message = Slicer::message(
             slicer.text(buf.get(0..2).unwrap()),
             vec![slicer.arg(
                 buf.get(2..6).unwrap(),
@@ -300,6 +314,7 @@ mod tests {
             )],
         );
 
+        message.attach(buf);
         assert_eq!(message.name(), "ok");
         assert_eq!(
             message.args().collect::<Vec<_>>(),

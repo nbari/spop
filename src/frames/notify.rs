@@ -25,6 +25,18 @@ pub struct NotifyFrame {
     pub messages: Vec<Message>,
 }
 
+impl NotifyFrame {
+    pub(crate) fn with_buffer(mut self, body: bytes::Bytes) -> Box<dyn SpopFrame> {
+        if let Some((last, others)) = self.messages.split_last_mut() {
+            for message in others {
+                message.attach(body.clone());
+            }
+            last.attach(body);
+        }
+        Box::new(self)
+    }
+}
+
 impl SpopFrame for NotifyFrame {
     fn frame_type(&self) -> &FrameType {
         &FrameType::Notify

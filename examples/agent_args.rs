@@ -1,4 +1,4 @@
-//! An SPOA that reads its message arguments back, exercising what changed in 0.13.0:
+//! An SPOA that reads its message arguments back through the borrowed NOTIFY API:
 //!
 //! - arguments keep their declaration order, and unnamed ones (`args src dst`) arrive with an
 //!   empty name, so position is the only thing that tells them apart;
@@ -17,7 +17,7 @@ use spop::{
     MAX_FRAME_SIZE_LIMIT, SpopCodec, StatusCode, TypedDataRef,
     actions::VarScope,
     frame::{FramePayload, FrameType, Message},
-    frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},
+    frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities},
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
@@ -50,11 +50,32 @@ fn render(value: TypedDataRef<'_>) -> String {
     }
 }
 
+/// Read a length-prefixed field from `HAProxy`'s binary request headers.
+fn field<'a>(input: &mut &'a [u8]) -> Option<&'a [u8]> {
+    let (rest, len) = spop::decode_varint(input).ok()?;
+    let (value, rest) = rest.split_at_checked(len.try_into().ok()?)?;
+    *input = rest;
+    Some(value)
+}
+
+fn country_header(mut block: &[u8]) -> Option<&str> {
+    loop {
+        let name = field(&mut block)?;
+        let value = field(&mut block)?;
+        if name.is_empty() {
+            return None;
+        }
+        if name.eq_ignore_ascii_case(b"cf-ipcountry") {
+            return std::str::from_utf8(value).ok();
+        }
+    }
+}
+
 /// Describes the arguments of `echo-args`, as declared in `spoe-test.conf`:
 ///
 /// ```text
 /// args answer=int(42) str(first) src country=hdr(CF-IPCountry) country=str(shadowed)
-///      str(second) bad\xff=str(lossy)
+///      str(second) bad\xff=str(lossy) headers=req.hdrs_bin
 /// ```
 fn summarize(message: &Message) -> String {
     let named = |name: &str| {
@@ -83,7 +104,16 @@ fn summarize(message: &Message) -> String {
     // are unambiguous only because no value in this fixture contains `,` or `:`.
     let all: Vec<String> = message
         .args()
-        .map(|(name, value)| format!("{}:{}", name.escape_default(), render(value)))
+        .map(|(name, value)| {
+            let rendered = match (name, value) {
+                ("headers", TypedDataRef::Binary(block)) => country_header(block)
+                    .unwrap_or("missing")
+                    .escape_default()
+                    .to_string(),
+                _ => render(value),
+            };
+            format!("{}:{rendered}", name.escape_default())
+        })
         .collect();
 
     format!(
@@ -139,8 +169,9 @@ async fn handle_connection(stream: TcpStream) -> Result<()> {
 
         match frame.frame_type() {
             FrameType::HaproxyHello => {
-                let hello = HaproxyHello::try_from(frame.payload())
-                    .map_err(|_| anyhow::anyhow!("Failed to parse HaproxyHello"))?;
+                let hello = frame
+                    .as_haproxy_hello()
+                    .ok_or_else(|| anyhow::anyhow!("Missing parsed HELLO"))?;
 
                 let Some(version) = hello.negotiate_version() else {
                     return disconnect(&mut socket, StatusCode::BadVersion).await;

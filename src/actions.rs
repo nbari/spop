@@ -59,10 +59,46 @@ pub enum Action {
         name: String,
         value: TypedData,
     },
+    /// Set a variable whose name and any string or binary payload have static storage.
+    SetVarStatic {
+        scope: VarScope,
+        name: &'static str,
+        value: crate::TypedDataRef<'static>,
+    },
     UnSetVar {
         scope: VarScope,
         name: String,
     },
+}
+
+impl Action {
+    pub(crate) fn encode_into(&self, buf: &mut Vec<u8>) {
+        let mut header = |kind, args, scope: VarScope, name: &str| {
+            buf.extend_from_slice(&[kind, args, scope.to_u8()]);
+            crate::encode_varint_into(name.len() as u64, buf);
+            buf.extend_from_slice(name.as_bytes());
+        };
+        match self {
+            Self::SetVar { scope, name, value } => {
+                header(1, 3, *scope, name);
+                value.to_bytes(buf);
+            }
+            Self::SetVarStatic { scope, name, value } => {
+                header(1, 3, *scope, name);
+                value.to_bytes(buf);
+            }
+            Self::UnSetVar { scope, name } => header(2, 2, *scope, name),
+        }
+    }
+
+    pub(crate) fn serialized_len(&self) -> usize {
+        let (name, value_len) = match self {
+            Self::SetVar { name, value, .. } => (name.as_str(), value.serialized_len()),
+            Self::SetVarStatic { name, value, .. } => (*name, value.serialized_len()),
+            Self::UnSetVar { name, .. } => (name.as_str(), 0),
+        };
+        3 + crate::varint_len(name.len() as u64) + name.len() + value_len
+    }
 }
 
 /// ```text
