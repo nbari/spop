@@ -1,13 +1,14 @@
 use crate::MAX_FRAME_SIZE_LIMIT;
 use crate::{
     SpopFrame,
-    frame::{FrameFlags, FramePayload, FrameType, Message, Metadata},
+    frame::{FrameFlags, FramePayload, FrameType, Message, Metadata, Slicer},
     frames::haproxy_disconnect::{HaproxyDisconnect, HaproxyDisconnectFrame},
     frames::haproxy_hello::{HaproxyHello, HaproxyHelloFrame},
     frames::notify::NotifyFrame,
-    types::{TypedData, typed_data},
+    types::{RawTypedData, TypedData, raw_typed_data},
     varint::decode_varint,
 };
+use bytes::Bytes;
 use nom::{
     Err, IResult, Parser,
     bytes::complete::take,
@@ -73,6 +74,43 @@ pub fn parse_frame_with_limit(
     // Extract only frame body. `bytes::complete::take` yields exactly `frame_length` bytes or
     // errors, and the check above already guaranteed they are available.
     let (remaining, frame) = take(frame_length)(input)?;
+
+    // Decoded messages point into the frame they came from (see `Message`), so it has to be
+    // owned: copy the body once. `SpopCodec` does without even this copy, because it owns the
+    // frames it splits off its read buffer.
+    let body = Bytes::copy_from_slice(frame);
+    match parse_frame_body(&body, &body) {
+        Ok((_, parsed)) => Ok((remaining, parsed)),
+        Err(e) => Err(e.map_input(|at| rebase(at, &body, frame))),
+    }
+}
+
+/// The position in `onto`, which holds the same bytes as `from`, that `at` has in `from`.
+///
+/// Errors from [`parse_frame_body`] point into the copied body; this points them back into the
+/// caller's input, so they borrow from it and their position can be computed from addresses as
+/// before.
+fn rebase<'a>(at: &[u8], from: &[u8], onto: &'a [u8]) -> &'a [u8] {
+    let offset = at.as_ptr().addr().saturating_sub(from.as_ptr().addr());
+    onto.get(offset..).unwrap_or_default()
+}
+
+/// Parse a frame body (everything after the 4-byte length prefix) that has been fully received.
+///
+/// `body` must be part of `frame`: the messages of a NOTIFY keep `frame` and point into it.
+///
+/// # Errors
+///
+/// Returns an error if the body is malformed or contains an unsupported frame type.
+#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+pub(crate) fn parse_frame_body<'a>(
+    body: &'a [u8],
+    frame_buf: &Bytes,
+) -> IResult<&'a [u8], Box<dyn SpopFrame>> {
+    // `input` stays at the start of the body, where errors about the frame as a whole point;
+    // `frame` advances as it is parsed.
+    let input = body;
+    let frame = input;
 
     //A frame always starts with its type, on one byte, followed by metadata containing flags, on 4
     //bytes and a two variable-length integer representing the stream identifier and the frame
@@ -144,7 +182,7 @@ pub fn parse_frame_with_limit(
                 payload: hello,
             };
 
-            Ok((remaining, Box::new(frame)))
+            Ok((&[], Box::new(frame)))
         }
 
         // 3.2.8. Frame: HAPROXY-DISCONNECT
@@ -167,7 +205,7 @@ pub fn parse_frame_with_limit(
                 payload: disconnect,
             };
 
-            Ok((remaining, Box::new(frame)))
+            Ok((&[], Box::new(frame)))
         }
 
         // 3.2.6. Frame: NOTIFY
@@ -176,13 +214,13 @@ pub fn parse_frame_with_limit(
         //
         // The payload of NOTIFY frames is a LIST-OF-MESSAGES.
         FrameType::Notify => {
-            let mut parser = all_consuming(parse_list_of_messages);
+            let mut parser = all_consuming(|i| parse_list_of_messages(i, frame_buf));
 
             let (_, messages) = parser.parse(frame_payload)?;
 
             let frame = NotifyFrame { metadata, messages };
 
-            Ok((remaining, Box::new(frame)))
+            Ok((&[], Box::new(frame)))
         }
 
         // Unknown frames may be silently skipped or trigger an error, depending on the
@@ -216,8 +254,25 @@ fn parse_key_value_pairs(input: &[u8]) -> IResult<&[u8], FramePayload<'_>> {
 /// - a name (STRING)
 /// - a value (TYPED-DATA)
 fn parse_key_value_pair(input: &[u8]) -> IResult<&[u8], (String, TypedData)> {
+    let (input, (key, value)) = parse_raw_key_value_pair(input)?;
+
+    // Lossy, like STRING values in `typed_data`. Argument names (`args <name>=<sample>`) are
+    // copied from the configuration without any character check, so a strict conversion
+    // turned one odd name into a frame error and a dropped connection. `HAProxy` does validate
+    // `spoe-message` names, but they share this rule, as do KV-LIST keys.
+    Ok((
+        input,
+        (
+            String::from_utf8_lossy(key).into_owned(),
+            value.into_owned(),
+        ),
+    ))
+}
+
+/// Parse a key-value pair, leaving its name and any STRING or BINARY payload as raw bytes.
+fn parse_raw_key_value_pair(input: &[u8]) -> IResult<&[u8], (&[u8], RawTypedData<'_>)> {
     // KV-NAME is a <STRING> (varint length + bytes)
-    let (input, key) = parse_string(input)?;
+    let (input, key) = parse_raw_string(input)?;
 
     // Ensure we have at least 1 byte left for the type
     if input.is_empty() {
@@ -225,13 +280,13 @@ fn parse_key_value_pair(input: &[u8]) -> IResult<&[u8], (String, TypedData)> {
     }
 
     // KV-VALUE is a <TYPED-DATA>
-    let (input, value) = typed_data(input)?;
+    let (input, value) = raw_typed_data(input)?;
 
     Ok((input, (key, value)))
 }
 
-/// Parse a length-prefixed string
-fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
+/// Parse a length-prefixed string, as raw bytes
+fn parse_raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     let (input, length) = decode_varint(input)?;
     let length: usize = length
         .try_into()
@@ -241,26 +296,26 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
     }
 
-    let (input, bytes) = take(length)(input)?;
-
-    // Lossy, like STRING values in `typed_data`. Argument names (`args <name>=<sample>`) are
-    // copied from the configuration without any character check, so a strict conversion
-    // turned one odd name into a frame error and a dropped connection. `HAProxy` does validate
-    // `spoe-message` names, but they share this decoder, as do KV-LIST keys.
-    Ok((input, String::from_utf8_lossy(bytes).into_owned()))
+    take(length)(input)
 }
 
 /// Parse entire list of messages payload
 ///
 /// LIST-OF-MESSAGES : [ <MESSAGE-NAME> <NB-ARGS:1 byte> <KV-LIST> ... ]
 /// MESSAGE-NAME     : <STRING>
+///
+/// Names and values are not copied: the messages point into `frame_buf`, which holds `input`.
 #[allow(clippy::indexing_slicing)]
-fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
+fn parse_list_of_messages<'a>(
+    input: &'a [u8],
+    frame_buf: &Bytes,
+) -> IResult<&'a [u8], Vec<Message>> {
+    let slicer = Slicer::new(frame_buf);
     let mut remaining = input;
     let mut messages = Vec::new();
 
     while !remaining.is_empty() {
-        let (local_remaining, message) = parse_string(remaining)?;
+        let (local_remaining, name) = parse_raw_string(remaining)?;
 
         let (local_remaining, nb_args_bytes) = take(1usize)(local_remaining)?;
 
@@ -278,15 +333,12 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
         let mut args = Vec::with_capacity(nb_args.min(remaining.len() / 2));
 
         for _ in 0..nb_args {
-            let (rest, arg) = parse_key_value_pair(remaining)?;
+            let (rest, (arg_name, value)) = parse_raw_key_value_pair(remaining)?;
             remaining = rest;
-            args.push(arg);
+            args.push(slicer.arg(arg_name, value));
         }
 
-        messages.push(Message {
-            name: message,
-            args,
-        });
+        messages.push(slicer.message(slicer.text(name), args));
     }
     Ok((remaining, messages))
 }
@@ -295,6 +347,7 @@ fn parse_list_of_messages(input: &[u8]) -> IResult<&[u8], Vec<Message>> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::types::TypedDataRef;
     use std::net::Ipv4Addr;
 
     /// A frame body of 0..=4 bytes used to leave the decoder wedged: the length check passed but
@@ -616,22 +669,19 @@ mod tests {
         ];
 
         let message = single_message(&framed(body));
-        assert_eq!(message.name, "msg1");
+        assert_eq!(message.name(), "msg1");
 
         // Declaration order is preserved, which is the only way to tell unnamed args apart.
         assert_eq!(
-            message.args,
+            message.args().collect::<Vec<_>>(),
             vec![
-                ("frontend".to_string(), TypedData::Int64(1)),
-                (String::new(), TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1))),
-                (
-                    String::new(),
-                    TypedData::IPv4(Ipv4Addr::new(198, 51, 100, 7))
-                ),
+                ("frontend", TypedDataRef::Int64(1)),
+                ("", TypedDataRef::IPv4(Ipv4Addr::new(192, 0, 2, 1))),
+                ("", TypedDataRef::IPv4(Ipv4Addr::new(198, 51, 100, 7))),
             ]
         );
 
-        assert_eq!(message.get("frontend"), Some(&TypedData::Int64(1)));
+        assert_eq!(message.get("frontend"), Some(TypedDataRef::Int64(1)));
         assert_eq!(message.get("missing"), None);
     }
 
@@ -655,10 +705,10 @@ mod tests {
         ];
 
         let message = single_message(&framed(body));
-        assert_eq!(message.args.len(), 2);
+        assert_eq!(message.args().len(), 2);
         assert_eq!(
             message.get("ip"),
-            Some(&TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
+            Some(TypedDataRef::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
         );
     }
 
@@ -683,7 +733,7 @@ mod tests {
         let message = single_message(&framed(body));
         assert_eq!(
             message.get("bad\u{FFFD}"),
-            Some(&TypedData::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
+            Some(TypedDataRef::IPv4(Ipv4Addr::new(192, 0, 2, 1)))
         );
     }
 

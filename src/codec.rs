@@ -1,5 +1,6 @@
-use crate::{MAX_FRAME_SIZE_LIMIT, SpopFrame, parser::parse_frame_with_limit};
-use bytes::{Buf, BufMut, BytesMut};
+use crate::{MAX_FRAME_SIZE_LIMIT, SpopFrame, parser::parse_frame_body};
+use bytes::{BufMut, BytesMut};
+use nom::error::ErrorKind;
 use std::cell::RefCell;
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
@@ -74,41 +75,69 @@ impl Decoder for SpopCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let initial_len = src.len();
+        // <FRAME-LENGTH:4 bytes> <FRAME>, checked in the same order as
+        // `parser::parse_frame_with_limit` does.
+        let Some(prefix) = src.first_chunk::<4>() else {
+            return Ok(None);
+        };
+        let frame_length = u32::from_be_bytes(*prefix);
 
-        match parse_frame_with_limit(src, self.max_frame_size) {
-            Ok((remaining, frame)) => {
-                // Calculate the number of bytes consumed by the frame
-                let parsed_len = initial_len - remaining.len();
+        // The peer is untrusted and can claim up to ~4 GiB; see `parse_frame_with_limit`.
+        if frame_length > self.max_frame_size {
+            return Err(frame_error(ErrorKind::TooLarge, 4));
+        }
 
-                // Advance the src buffer by the consumed length
-                src.advance(parsed_len);
+        let frame_end = 4 + frame_length as usize;
+        if src.len() < frame_end {
+            return Ok(None);
+        }
 
-                // Return the frame
-                Ok(Some(frame))
-            }
+        // Take the frame out of the read buffer without copying it. Every name and value decoded
+        // from it is a slice of it, so they cost no allocation of their own and stay valid
+        // however `src` is refilled.
+        let frame = src.split_to(frame_end).freeze();
 
-            Err(nom::Err::Incomplete(_)) => Ok(None),
+        match parse_frame_body(frame.get(4..).unwrap_or_default(), &frame) {
+            Ok((_, parsed)) => Ok(Some(parsed)),
 
-            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
-                // Never format `e` itself. Its `input` is a slice of the read buffer, and
+            Err(e) => {
+                // Never format the nom error itself. Its `input` is a slice of the frame, and
                 // `{e:?}` prints it byte by byte as decimal: an invalid frame of up to
                 // `max_frame_size` (1 MiB before the handshake) turned into an error message
                 // several times that size, which agents then log. The kind and where it
-                // happened are what is useful.
-                //
-                // `e.input` is not always a suffix of `src` (errors inside a frame body point
-                // into a slice that ends at the frame boundary), so the offset comes from the
-                // addresses rather than from the remaining length.
-                let offset = e.input.as_ptr().addr().saturating_sub(src.as_ptr().addr());
+                // happened are what is useful. Errors point into the body, a slice of `frame`,
+                // so the offset from the frame's start counts the length prefix too.
+                let error = match e {
+                    nom::Err::Error(e) | nom::Err::Failure(e) => frame_error(
+                        e.code,
+                        e.input
+                            .as_ptr()
+                            .addr()
+                            .saturating_sub(frame.as_ptr().addr()),
+                    ),
+                    // The body is complete and parsed with `complete` parsers, so this cannot
+                    // happen; reporting it beats waiting for bytes the frame does not have.
+                    nom::Err::Incomplete(_) => frame_error(ErrorKind::Eof, frame_end),
+                };
 
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to parse frame: {:?} at byte {offset}", e.code),
-                ))
+                // Leave the read buffer as it was: the frame stays unconsumed on errors.
+                // Copying is fine on this path.
+                let mut restored = BytesMut::with_capacity(frame.len() + src.len());
+                restored.extend_from_slice(&frame);
+                restored.extend_from_slice(src);
+                *src = restored;
+
+                Err(error)
             }
         }
     }
+}
+
+fn frame_error(kind: ErrorKind, offset: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("Failed to parse frame: {kind:?} at byte {offset}"),
+    )
 }
 
 impl Encoder<Box<dyn SpopFrame>> for SpopCodec {

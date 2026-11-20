@@ -1,6 +1,27 @@
 Changelog
 =========
 
+## Unreleased
+
+### Changed
+- Decode NOTIFY messages without copying their names and values. `SpopCodec` splits each frame
+  off its read buffer, and a `Message` keeps that frame and points into it, so decoding no longer
+  allocates per argument: 4 allocations instead of 27 for a 15-argument frame
+  (`tests/decode_allocations.rs`), and about 26% (3 arguments) to 39% (15 arguments) fewer CPU
+  cycles per decoded frame. `parse_frame` copies the frame body once. A message keeps its frame
+  alive while it exists
+
+### Added
+- `TypedDataRef`, a `TypedData` that borrows its STRING or BINARY payload. `TypedData::from`
+  and `TypedDataRef::into_owned` copy it
+- `Message::new`, `Message::name`, `Message::args` (an iterator of `(&str, TypedDataRef)` in
+  declaration order) and the `frame::Args` iterator type
+
+### Breaking
+- `Message::name` and `Message::args` are methods instead of public fields, and `Message::get`
+  returns `Option<TypedDataRef<'_>>` instead of `Option<&TypedData>`. Match on
+  `TypedDataRef::String(s)` where you matched `TypedData::String(s)`; `s` is a `&str`
+
 ## 0.13.1 - 2026-10-02
 
 ### Added

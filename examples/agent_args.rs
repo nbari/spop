@@ -14,7 +14,7 @@
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use spop::{
-    MAX_FRAME_SIZE_LIMIT, SpopCodec, StatusCode, TypedData,
+    MAX_FRAME_SIZE_LIMIT, SpopCodec, StatusCode, TypedDataRef,
     actions::VarScope,
     frame::{FramePayload, FrameType, Message},
     frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},
@@ -35,18 +35,18 @@ async fn main() -> Result<()> {
 }
 
 /// Renders a value for the summary.
-fn render(value: &TypedData) -> String {
+fn render(value: TypedDataRef<'_>) -> String {
     match value {
-        TypedData::Null => "null".to_string(),
-        TypedData::Bool(b) => b.to_string(),
-        TypedData::Int32(n) => n.to_string(),
-        TypedData::UInt32(n) => n.to_string(),
-        TypedData::Int64(n) => n.to_string(),
-        TypedData::UInt64(n) => n.to_string(),
-        TypedData::IPv4(ip) => ip.to_string(),
-        TypedData::IPv6(ip) => ip.to_string(),
-        TypedData::String(s) => s.clone(),
-        TypedData::Binary(bytes) => format!("{} bytes", bytes.len()),
+        TypedDataRef::Null => "null".to_string(),
+        TypedDataRef::Bool(b) => b.to_string(),
+        TypedDataRef::Int32(n) => n.to_string(),
+        TypedDataRef::UInt32(n) => n.to_string(),
+        TypedDataRef::Int64(n) => n.to_string(),
+        TypedDataRef::UInt64(n) => n.to_string(),
+        TypedDataRef::IPv4(ip) => ip.to_string(),
+        TypedDataRef::IPv6(ip) => ip.to_string(),
+        TypedDataRef::String(s) => s.to_string(),
+        TypedDataRef::Binary(bytes) => format!("{} bytes", bytes.len()),
     }
 }
 
@@ -72,8 +72,7 @@ fn summarize(message: &Message) -> String {
 
     // Unnamed arguments all have an empty name; their order is the order they were declared in.
     let unnamed: Vec<String> = message
-        .args
-        .iter()
+        .args()
         .filter(|(name, _)| name.is_empty())
         .map(|(_, value)| render(value))
         .collect();
@@ -83,8 +82,7 @@ fn summarize(message: &Message) -> String {
     // `escape_default` keeps the header ASCII, turning U+FFFD into `\u{fffd}`. The separators
     // are unambiguous only because no value in this fixture contains `,` or `:`.
     let all: Vec<String> = message
-        .args
-        .iter()
+        .args()
         .map(|(name, value)| format!("{}:{}", name.escape_default(), render(value)))
         .collect();
 
@@ -178,13 +176,13 @@ async fn handle_connection(stream: TcpStream) -> Result<()> {
                     let mut ack = Ack::new(frame.metadata().stream_id, frame.metadata().frame_id);
 
                     for message in *messages {
-                        if message.name != "echo-args" {
-                            eprintln!("Unsupported message: {:?}", message.name);
+                        if message.name() != "echo-args" {
+                            eprintln!("Unsupported message: {:?}", message.name());
                             continue;
                         }
 
                         // Arguments in the order HAProxy sent them; unnamed ones show as "".
-                        for (index, (name, value)) in message.args.iter().enumerate() {
+                        for (index, (name, value)) in message.args().enumerate() {
                             println!("  #{index} {name:?} = {value:?}");
                         }
 

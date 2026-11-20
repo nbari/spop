@@ -82,6 +82,36 @@ fn bench_decode(c: &mut Criterion) {
         });
     });
 
+    // The same through one long-lived codec and read buffer, as `Framed` keeps them: each
+    // iteration appends a frame, as a socket read would, then decodes and drops it.
+    let fifteen_args = notify_frame(&[
+        ("src-ip", "192.0.2.1"),
+        ("src-port", "41234"),
+        ("dst-ip", "198.51.100.7"),
+        ("dst-port", "443"),
+        ("method", "GET"),
+        ("path", "/api/v4/projects/1/jobs"),
+        ("query", "q=1&page=2"),
+        ("version", "1.1"),
+        ("host", "example.com"),
+        ("user-agent", "curl/8.11.1-dev"),
+        ("body-mode", "none"),
+        ("body-complete", "false"),
+        ("detect-only", "true"),
+        ("app", "policy:default"),
+        ("req_id", "01a1f751-5a7b-7911-90e2-444188eece97"),
+    ]);
+    for (name, input) in [("notify_3_args", &frame), ("notify_15_args", &fifteen_args)] {
+        group.bench_function(format!("codec_reused_buffer/{name}"), |b| {
+            let mut codec = SpopCodec::default();
+            let mut buf = BytesMut::with_capacity(8 * 1024);
+            b.iter(|| {
+                buf.extend_from_slice(input);
+                codec.decode(black_box(&mut buf)).expect("decode")
+            });
+        });
+    }
+
     group.finish();
 }
 

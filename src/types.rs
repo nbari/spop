@@ -70,6 +70,21 @@ pub enum TypedData {
 }
 
 impl TypedData {
+    /// The value as a [`TypedDataRef`], unless it has a STRING or BINARY payload to borrow.
+    pub(crate) fn scalar(&self) -> Option<TypedDataRef<'static>> {
+        match self {
+            Self::Null => Some(TypedDataRef::Null),
+            Self::Bool(v) => Some(TypedDataRef::Bool(*v)),
+            Self::Int32(v) => Some(TypedDataRef::Int32(*v)),
+            Self::UInt32(v) => Some(TypedDataRef::UInt32(*v)),
+            Self::Int64(v) => Some(TypedDataRef::Int64(*v)),
+            Self::UInt64(v) => Some(TypedDataRef::UInt64(*v)),
+            Self::IPv4(v) => Some(TypedDataRef::IPv4(*v)),
+            Self::IPv6(v) => Some(TypedDataRef::IPv6(*v)),
+            Self::String(_) | Self::Binary(_) => None,
+        }
+    }
+
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         match typed_data(bytes) {
@@ -241,17 +256,97 @@ try_from_typed_data!(Ipv6Addr, IPv6);
 try_from_typed_data!(String, String);
 try_from_typed_data!(Vec<u8>, Binary);
 
+/// A [`TypedData`] that borrows its STRING or BINARY payload.
+///
+/// [`crate::frame::Message`] hands out its arguments this way: their payloads stay in the frame
+/// they arrived in, so reading them neither copies nor allocates. Convert one with
+/// [`TypedData::from`] (or [`TypedDataRef::into_owned`]) to keep it beyond the message.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum TypedDataRef<'a> {
+    Null,
+    Bool(bool),
+    Int32(i32),
+    UInt32(u32),
+    Int64(i64),
+    UInt64(u64),
+    IPv4(Ipv4Addr),
+    IPv6(Ipv6Addr),
+    String(&'a str),
+    Binary(&'a [u8]),
+}
+
+impl TypedDataRef<'_> {
+    /// Copies the payload into an owned [`TypedData`].
+    #[must_use]
+    pub fn into_owned(self) -> TypedData {
+        match self {
+            Self::Null => TypedData::Null,
+            Self::Bool(v) => TypedData::Bool(v),
+            Self::Int32(v) => TypedData::Int32(v),
+            Self::UInt32(v) => TypedData::UInt32(v),
+            Self::Int64(v) => TypedData::Int64(v),
+            Self::UInt64(v) => TypedData::UInt64(v),
+            Self::IPv4(v) => TypedData::IPv4(v),
+            Self::IPv6(v) => TypedData::IPv6(v),
+            Self::String(v) => TypedData::String(v.to_owned()),
+            Self::Binary(v) => TypedData::Binary(v.to_vec()),
+        }
+    }
+}
+
+impl From<TypedDataRef<'_>> for TypedData {
+    fn from(value: TypedDataRef<'_>) -> Self {
+        value.into_owned()
+    }
+}
+
+impl<'a> From<&'a TypedData> for TypedDataRef<'a> {
+    fn from(value: &'a TypedData) -> Self {
+        match value {
+            TypedData::String(v) => Self::String(v),
+            TypedData::Binary(v) => Self::Binary(v),
+            scalar => scalar.scalar().unwrap_or(Self::Null),
+        }
+    }
+}
+
+/// A decoded TYPED-DATA whose STRING or BINARY payload is still the raw bytes of the input.
+#[derive(Clone, Copy)]
+pub(crate) enum RawTypedData<'a> {
+    /// Any type but STRING and BINARY.
+    Scalar(TypedDataRef<'static>),
+    /// Not validated as UTF-8 yet.
+    String(&'a [u8]),
+    Binary(&'a [u8]),
+}
+
+impl RawTypedData<'_> {
+    /// Copies the payload; invalid UTF-8 in a STRING is replaced by U+FFFD.
+    pub(crate) fn into_owned(self) -> TypedData {
+        match self {
+            Self::Scalar(value) => value.into_owned(),
+            Self::String(data) => TypedData::String(String::from_utf8_lossy(data).into_owned()),
+            Self::Binary(data) => TypedData::Binary(data.to_vec()),
+        }
+    }
+}
+
 /// Returns the Type ID and Flags from the first byte of the input
 ///
 /// # Errors
 ///
 /// Returns an error if the input is empty, incomplete, or contains an unsupported type.
+pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
+    raw_typed_data(input).map(|(input, raw)| (input, raw.into_owned()))
+}
+
+/// Like [`typed_data`], but leaves a STRING or BINARY payload as a slice of `input`.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::indexing_slicing
 )]
-pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
+pub(crate) fn raw_typed_data(input: &[u8]) -> IResult<&[u8], RawTypedData<'_>> {
     if input.is_empty() {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
     }
@@ -264,20 +359,23 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
     let type_id = type_and_flags & 0x0F;
     let flags = type_and_flags >> 4;
 
+    let scalar = |value| RawTypedData::Scalar(value);
     match type_id {
-        TYPE_NULL => Ok((input, TypedData::Null)),
-        TYPE_BOOL => Ok((input, TypedData::Bool((flags & 1) != 0))),
-        TYPE_INT32 => decode_varint(input).map(|(i, v)| (i, TypedData::Int32(v as i32))),
-        TYPE_UINT32 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt32(v as u32))),
-        TYPE_INT64 => decode_varint(input).map(|(i, v)| (i, TypedData::Int64(v as i64))),
-        TYPE_UINT64 => decode_varint(input).map(|(i, v)| (i, TypedData::UInt64(v))),
+        TYPE_NULL => Ok((input, scalar(TypedDataRef::Null))),
+        TYPE_BOOL => Ok((input, scalar(TypedDataRef::Bool((flags & 1) != 0)))),
+        TYPE_INT32 => decode_varint(input).map(|(i, v)| (i, scalar(TypedDataRef::Int32(v as i32)))),
+        TYPE_UINT32 => {
+            decode_varint(input).map(|(i, v)| (i, scalar(TypedDataRef::UInt32(v as u32))))
+        }
+        TYPE_INT64 => decode_varint(input).map(|(i, v)| (i, scalar(TypedDataRef::Int64(v as i64)))),
+        TYPE_UINT64 => decode_varint(input).map(|(i, v)| (i, scalar(TypedDataRef::UInt64(v)))),
         TYPE_IPV4 => {
             if input.len() < 4 {
                 return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
             }
             let (input, bytes) = take(4usize)(input)?;
             let addr = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
-            Ok((input, TypedData::IPv4(addr)))
+            Ok((input, scalar(TypedDataRef::IPv4(addr))))
         }
         TYPE_IPV6 => {
             if input.len() < 16 {
@@ -287,7 +385,7 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
             let addr = <[u8; 16]>::try_from(bytes)
                 .map(Ipv6Addr::from)
                 .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
-            Ok((input, TypedData::IPv6(addr)))
+            Ok((input, scalar(TypedDataRef::IPv6(addr))))
         }
         TYPE_STRING | TYPE_BINARY => {
             let (input, length) = decode_varint(input)?;
@@ -301,10 +399,9 @@ pub fn typed_data(input: &[u8]) -> IResult<&[u8], TypedData> {
 
             let (input, data) = take(length)(input)?;
             if type_id == TYPE_STRING {
-                let s = String::from_utf8_lossy(data).into_owned();
-                Ok((input, TypedData::String(s)))
+                Ok((input, RawTypedData::String(data)))
             } else {
-                Ok((input, TypedData::Binary(data.to_vec())))
+                Ok((input, RawTypedData::Binary(data)))
             }
         }
         _ => Err(nom::Err::Error(nom::error::Error::new(
