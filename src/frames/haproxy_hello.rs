@@ -156,6 +156,10 @@ impl HaproxyHello {
 }
 
 impl SpopFrame for HaproxyHelloFrame {
+    fn as_haproxy_hello(&self) -> Option<&HaproxyHello> {
+        Some(&self.payload)
+    }
+
     fn frame_type(&self) -> &FrameType {
         &FrameType::HaproxyHello
     }

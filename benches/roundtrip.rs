@@ -22,43 +22,15 @@
 
 use bytes::BytesMut;
 use criterion::{Criterion, criterion_group, criterion_main};
-use spop::{SpopCodec, actions::VarScope, frames::Ack, parser::parse_frame};
+use spop::{
+    SpopCodec, SpopFrame, TypedDataRef, actions::VarScope, frames::Ack, parser::parse_frame,
+};
 use std::hint::black_box;
 use tokio_util::codec::{Decoder, Encoder};
 
-/// Appends a SPOP `<STRING>`: varint length prefix then raw bytes.
-///
-/// Every length used here is below 240, so the varint is a single byte.
-fn push_string(buf: &mut Vec<u8>, s: &str) {
-    assert!(
-        s.len() < 240,
-        "bench strings stay in the 1-byte varint range"
-    );
-    buf.push(s.len() as u8);
-    buf.extend_from_slice(s.as_bytes());
-}
-
-/// Builds a NOTIFY frame matching `spoe-test.conf`'s `log-request` message.
-fn notify_frame(args: &[(&str, &str)]) -> Vec<u8> {
-    let mut body = Vec::new();
-
-    body.push(0x03); // FRAME-TYPE: NOTIFY
-    body.extend_from_slice(&1u32.to_be_bytes()); // FLAGS: FIN
-    body.push(0x01); // STREAM-ID varint
-    body.push(0x01); // FRAME-ID varint
-
-    push_string(&mut body, "log-request");
-    body.push(args.len() as u8); // NB-ARGS
-    for (key, value) in args {
-        push_string(&mut body, key);
-        body.push(0x08); // TYPED-DATA: STRING
-        push_string(&mut body, value);
-    }
-
-    let mut frame = (body.len() as u32).to_be_bytes().to_vec();
-    frame.extend_from_slice(&body);
-    frame
-}
+#[path = "../tests/support/mod.rs"]
+mod support;
+use support::{check_request_frame, notify_frame};
 
 fn bench_decode(c: &mut Criterion) {
     let frame = notify_frame(&[
@@ -84,30 +56,30 @@ fn bench_decode(c: &mut Criterion) {
 
     // The same through one long-lived codec and read buffer, as `Framed` keeps them: each
     // iteration appends a frame, as a socket read would, then decodes and drops it.
-    let fifteen_args = notify_frame(&[
-        ("src-ip", "192.0.2.1"),
-        ("src-port", "41234"),
-        ("dst-ip", "198.51.100.7"),
-        ("dst-port", "443"),
-        ("method", "GET"),
-        ("path", "/api/v4/projects/1/jobs"),
-        ("query", "q=1&page=2"),
-        ("version", "1.1"),
-        ("host", "example.com"),
-        ("user-agent", "curl/8.11.1-dev"),
-        ("body-mode", "none"),
-        ("body-complete", "false"),
-        ("detect-only", "true"),
-        ("app", "policy:default"),
-        ("req_id", "01a1f751-5a7b-7911-90e2-444188eece97"),
-    ]);
-    for (name, input) in [("notify_3_args", &frame), ("notify_15_args", &fifteen_args)] {
+    let two = check_request_frame(1, "/api/v4/projects/1/jobs", 2);
+    let ten = check_request_frame(1, "/api/v4/projects/1/jobs", 10);
+    for (name, input) in [
+        ("notify_3_args", &frame),
+        ("mixed_2_headers", &two),
+        ("mixed_10_headers", &ten),
+    ] {
         group.bench_function(format!("codec_reused_buffer/{name}"), |b| {
             let mut codec = SpopCodec::default();
             let mut buf = BytesMut::with_capacity(8 * 1024);
             b.iter(|| {
                 buf.extend_from_slice(input);
-                codec.decode(black_box(&mut buf)).expect("decode")
+                let frame = codec
+                    .decode(black_box(&mut buf))
+                    .expect("decode")
+                    .expect("complete");
+                if let spop::FramePayload::ListOfMessages(messages) = frame.payload() {
+                    for message in messages {
+                        black_box(message.name());
+                        message.args().for_each(|arg| {
+                            black_box(arg);
+                        });
+                    }
+                }
             });
         });
     }
@@ -141,5 +113,90 @@ fn bench_round_trip(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_decode, bench_round_trip);
+fn bench_ack(c: &mut Criterion) {
+    let mut group = c.benchmark_group("two_action_ack");
+    for (label, build) in [
+        (
+            "owned",
+            (|| {
+                Ack::new(1, 1)
+                    .set_var(VarScope::Session, "ip_score", 42u32)
+                    .set_var(VarScope::Transaction, "my_var", "tequila")
+            }) as fn() -> Ack,
+        ),
+        ("static", || {
+            Ack::new(1, 1)
+                .set_var_static(VarScope::Session, "ip_score", TypedDataRef::UInt32(42))
+                .set_var_static(
+                    VarScope::Transaction,
+                    "my_var",
+                    TypedDataRef::String("tequila"),
+                )
+        }),
+    ] {
+        let mut codec = SpopCodec::default();
+        let mut dst = BytesMut::with_capacity(128);
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                dst.clear();
+                codec
+                    .encode(Box::new(build()), black_box(&mut dst))
+                    .unwrap();
+            });
+        });
+    }
+}
+
+fn bench_hello(c: &mut Criterion) {
+    use spop::{
+        Version,
+        frame::{FrameFlags, Metadata},
+        frames::{FrameCapabilities, HaproxyHello, haproxy_hello::HaproxyHelloFrame},
+    };
+    let mut group = c.benchmark_group("hello_negotiation");
+    for health in [true, false] {
+        let hello = HaproxyHelloFrame {
+            metadata: Metadata {
+                flags: FrameFlags::new(true, false),
+                stream_id: 0,
+                frame_id: 0,
+            },
+            payload: HaproxyHello {
+                supported_versions: vec![Version::new(2, 0, 0)],
+                max_frame_size: 16380,
+                capabilities: if health {
+                    vec![]
+                } else {
+                    vec![FrameCapabilities::Pipelining]
+                },
+                engine_id: (!health).then(|| "example".into()),
+                healthcheck: health.then_some(true),
+            },
+        };
+        let wire = hello.serialize().unwrap();
+        let (_, frame) = parse_frame(&wire).unwrap();
+        let scenario = if health { "healthcheck" } else { "regular" };
+        let negotiate = |hello: &HaproxyHello| {
+            (
+                hello.negotiate_version(),
+                hello.negotiate_max_frame_size(16380),
+                hello.healthcheck,
+            )
+        };
+        group.bench_function(format!("{scenario}/reparse"), |b| {
+            b.iter(|| negotiate(&HaproxyHello::try_from(black_box(&frame).payload()).unwrap()));
+        });
+        group.bench_function(format!("{scenario}/borrow"), |b| {
+            b.iter(|| negotiate(black_box(&frame).as_haproxy_hello().unwrap()));
+        });
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_decode,
+    bench_round_trip,
+    bench_ack,
+    bench_hello
+);
 criterion_main!(benches);

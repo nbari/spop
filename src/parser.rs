@@ -11,7 +11,6 @@ use crate::{
 use bytes::Bytes;
 use nom::{
     Err, IResult, Parser,
-    bytes::complete::take,
     combinator::all_consuming,
     error::{Error, ErrorKind},
     number::{
@@ -26,7 +25,6 @@ use std::collections::HashMap;
 /// # Errors
 ///
 /// Returns an error if the input is incomplete, malformed, or contains an unsupported frame type.
-#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
 pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
     parse_frame_with_limit(input, MAX_FRAME_SIZE_LIMIT)
 }
@@ -34,83 +32,43 @@ pub fn parse_frame(input: &[u8]) -> IResult<&[u8], Box<dyn SpopFrame>> {
 /// Parse a frame, rejecting any frame whose declared length exceeds `max_frame_size`.
 ///
 /// Prefer this over [`parse_frame`] once the HELLO handshake has settled on a value: it holds the
-/// peer to what it actually agreed to, rather than to [`MAX_FRAME_SIZE_LIMIT`]. This is what
-/// [`crate::SpopCodec`] calls.
+/// peer to what it actually agreed to. Both entry points share their framing and limit checks
+/// with [`crate::SpopCodec`].
 ///
 /// # Errors
 ///
 /// Returns an error if the input is incomplete, malformed, exceeds `max_frame_size`, or contains
 /// an unsupported frame type.
-#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
+#[allow(clippy::indexing_slicing)]
 pub fn parse_frame_with_limit(
     input: &[u8],
     max_frame_size: u32,
 ) -> IResult<&[u8], Box<dyn SpopFrame>> {
-    // Exchange between HAProxy and agents are made using FRAME packets. All frames must be
-    // prefixed with their size encoded on 4 bytes in network byte order:
-    // <FRAME-LENGTH:4 bytes> <FRAME>
-    //
-    // Only the length prefix may legitimately be incomplete: everything after it is parsed
-    // from a frame body we have already fully received, so it uses `complete` parsers.
-    let (input, frame_length) = be_u32_streaming(input)?;
-
-    // The peer is untrusted and this length is four bytes wide, so it can claim up to ~4 GiB.
-    // Nothing below will ever complete such a frame, so the codec never calls `advance` and the
-    // read buffer is never drained: it accumulates everything the peer sends, without bound and
-    // never reclaimed. Capping the claim keeps that bounded. (The peer must actually transmit the
-    // bytes to occupy them -- this is memory exhaustion, not amplification.)
-    if frame_length > max_frame_size {
-        return Err(nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)));
-    }
-
-    // Check if the input has enough bytes for the frame
-    // If not, return the same error nom would return.
-    if input.len() < frame_length as usize {
-        return Err(nom::Err::Incomplete(nom::Needed::new(
-            frame_length as usize - input.len(),
-        )));
-    }
-
-    // Extract only frame body. `bytes::complete::take` yields exactly `frame_length` bytes or
-    // errors, and the check above already guaranteed they are available.
-    let (remaining, frame) = take(frame_length)(input)?;
-
-    // Decoded messages point into the frame they came from (see `Message`), so it has to be
-    // owned: copy the body once. `SpopCodec` does without even this copy, because it owns the
-    // frames it splits off its read buffer.
-    let body = Bytes::copy_from_slice(frame);
-    match parse_frame_body(&body, &body) {
-        Ok((_, parsed)) => Ok((remaining, parsed)),
-        Err(e) => Err(e.map_input(|at| rebase(at, &body, frame))),
-    }
+    let (remaining, parsed) = parse_packet(input, max_frame_size)?;
+    let frame = match parsed {
+        ParsedFrame::Control(frame) => frame,
+        ParsedFrame::Notify(frame) => {
+            let end = input.len() - remaining.len();
+            frame.with_buffer(Bytes::copy_from_slice(&input[4..end]))
+        }
+    };
+    Ok((remaining, frame))
 }
 
-/// The position in `onto`, which holds the same bytes as `from`, that `at` has in `from`.
-///
-/// Errors from [`parse_frame_body`] point into the copied body; this points them back into the
-/// caller's input, so they borrow from it and their position can be computed from addresses as
-/// before.
-fn rebase<'a>(at: &[u8], from: &[u8], onto: &'a [u8]) -> &'a [u8] {
-    let offset = at.as_ptr().addr().saturating_sub(from.as_ptr().addr());
-    onto.get(offset..).unwrap_or_default()
+pub(crate) enum ParsedFrame {
+    Control(Box<dyn SpopFrame>),
+    Notify(NotifyFrame),
 }
 
-/// Parse a frame body (everything after the 4-byte length prefix) that has been fully received.
-///
-/// `body` must be part of `frame`: the messages of a NOTIFY keep `frame` and point into it.
-///
-/// # Errors
-///
-/// Returns an error if the body is malformed or contains an unsupported frame type.
-#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
-pub(crate) fn parse_frame_body<'a>(
-    body: &'a [u8],
-    frame_buf: &Bytes,
-) -> IResult<&'a [u8], Box<dyn SpopFrame>> {
-    // `input` stays at the start of the body, where errors about the frame as a whole point;
-    // `frame` advances as it is parsed.
-    let input = body;
-    let frame = input;
+/// Parse one complete packet before consuming any input. Whole-frame errors refer to the
+/// original input after the prefix. Payload parsers can only see the declared body.
+pub(crate) fn parse_packet(input: &[u8], limit: u32) -> IResult<&[u8], ParsedFrame> {
+    let (input, length) = be_u32_streaming(input)?;
+    if length > limit {
+        return Err(Err::Failure(Error::new(input, ErrorKind::TooLarge)));
+    }
+    let (remaining, frame) = take_body(input, length)?;
+    let frame_buf = frame;
 
     //A frame always starts with its type, on one byte, followed by metadata containing flags, on 4
     //bytes and a two variable-length integer representing the stream identifier and the frame
@@ -182,7 +140,7 @@ pub(crate) fn parse_frame_body<'a>(
                 payload: hello,
             };
 
-            Ok((&[], Box::new(frame)))
+            Ok((remaining, ParsedFrame::Control(Box::new(frame))))
         }
 
         // 3.2.8. Frame: HAPROXY-DISCONNECT
@@ -205,7 +163,7 @@ pub(crate) fn parse_frame_body<'a>(
                 payload: disconnect,
             };
 
-            Ok((&[], Box::new(frame)))
+            Ok((remaining, ParsedFrame::Control(Box::new(frame))))
         }
 
         // 3.2.6. Frame: NOTIFY
@@ -220,13 +178,19 @@ pub(crate) fn parse_frame_body<'a>(
 
             let frame = NotifyFrame { metadata, messages };
 
-            Ok((&[], Box::new(frame)))
+            Ok((remaining, ParsedFrame::Notify(frame)))
         }
 
         // Unknown frames may be silently skipped or trigger an error, depending on the
         // implementation.
         _ => Err(nom::Err::Failure(Error::new(input, ErrorKind::NoneOf))),
     }
+}
+
+/// The prefix has already been consumed. Comparing the body length directly also works
+/// when a body plus its prefix cannot be represented by a 32-bit usize.
+fn take_body(input: &[u8], length: u32) -> IResult<&[u8], &[u8]> {
+    nom::bytes::streaming::take(length)(input)
 }
 
 /// Parse entire KV-LIST payload
@@ -274,11 +238,6 @@ fn parse_raw_key_value_pair(input: &[u8]) -> IResult<&[u8], (&[u8], RawTypedData
     // KV-NAME is a <STRING> (varint length + bytes)
     let (input, key) = parse_raw_string(input)?;
 
-    // Ensure we have at least 1 byte left for the type
-    if input.is_empty() {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
-    }
-
     // KV-VALUE is a <TYPED-DATA>
     let (input, value) = raw_typed_data(input)?;
 
@@ -292,11 +251,10 @@ fn parse_raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
         .try_into()
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::TooLarge)))?;
 
-    if input.len() < length {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::Eof)));
-    }
-
-    take(length)(input)
+    let (value, rest) = input
+        .split_at_checked(length)
+        .ok_or_else(|| Err::Error(Error::new(input, ErrorKind::Eof)))?;
+    Ok((rest, value))
 }
 
 /// Parse entire list of messages payload
@@ -305,10 +263,9 @@ fn parse_raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
 /// MESSAGE-NAME     : <STRING>
 ///
 /// Names and values are not copied: the messages point into `frame_buf`, which holds `input`.
-#[allow(clippy::indexing_slicing)]
 fn parse_list_of_messages<'a>(
     input: &'a [u8],
-    frame_buf: &Bytes,
+    frame_buf: &[u8],
 ) -> IResult<&'a [u8], Vec<Message>> {
     let slicer = Slicer::new(frame_buf);
     let mut remaining = input;
@@ -317,11 +274,8 @@ fn parse_list_of_messages<'a>(
     while !remaining.is_empty() {
         let (local_remaining, name) = parse_raw_string(remaining)?;
 
-        let (local_remaining, nb_args_bytes) = take(1usize)(local_remaining)?;
-
-        // NB-ARGS is a single byte, so this is bounded by 255.
-        let nb_args = nb_args_bytes[0] as usize;
-        remaining = local_remaining;
+        let (rest, nb_args) = be_u8(local_remaining)?;
+        remaining = rest;
 
         // Duplicate names are legitimate here, unlike in a KV-LIST: argument names are
         // optional, and `HAProxy` sends every unnamed argument with an empty name, so
@@ -330,7 +284,7 @@ fn parse_list_of_messages<'a>(
         // NB-ARGS is untrusted, and every argument takes at least two bytes (a name length and
         // a type), so capping the capacity by what is left keeps a forged count from making
         // the parser allocate for arguments that cannot be there.
-        let mut args = Vec::with_capacity(nb_args.min(remaining.len() / 2));
+        let mut args = Vec::with_capacity(usize::from(nb_args).min(remaining.len() / 2));
 
         for _ in 0..nb_args {
             let (rest, (arg_name, value)) = parse_raw_key_value_pair(remaining)?;
@@ -338,7 +292,13 @@ fn parse_list_of_messages<'a>(
             args.push(slicer.arg(arg_name, value));
         }
 
-        messages.push(slicer.message(slicer.text(name), args));
+        let message = Slicer::message(slicer.text(name), args);
+        // The usual single-message packet needs exactly one slot. Keep amortized growth
+        // for batches, whose message count is not present on the wire.
+        if remaining.is_empty() && messages.is_empty() {
+            return Ok((remaining, vec![message]));
+        }
+        messages.push(message);
     }
     Ok((remaining, messages))
 }
@@ -349,6 +309,20 @@ mod tests {
     use super::*;
     use crate::types::TypedDataRef;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn body_lengths_use_the_full_wire_width() {
+        let body = b"abc";
+        assert_eq!(take_body(body, 3), Ok((&b""[..], &body[..])));
+        for length in [u32::MAX - 3, u32::MAX] {
+            assert_eq!(
+                take_body(body, length),
+                Err(Err::Incomplete(nom::Needed::new(
+                    length as usize - body.len()
+                )))
+            );
+        }
+    }
 
     /// A frame body of 0..=4 bytes used to leave the decoder wedged: the length check passed but
     /// the streaming `be_u8`/`be_u32` reported `Incomplete`, which the codec mapped to

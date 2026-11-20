@@ -52,12 +52,9 @@ use std::borrow::Cow;
 /// gives the value both peers actually settled on, and
 /// [`crate::SpopCodec::set_max_frame_size`] applies it.
 ///
-/// Calling it matters for decoded memory too, not just buffered bytes. A decoded frame is
-/// larger than its wire form: on a typical 64-bit build every argument becomes an owned
-/// `String` name plus a [`TypedData`], about 56 bytes, from as little as 2 bytes on the wire.
-/// Argument storage for a hostile frame of minimal arguments can therefore approach 28 times
-/// the frame size, about 29 MB at this limit against about 450 KB at the usual negotiated
-/// 16380. The exact total also depends on the number of messages and on collection capacity.
+/// Each decoded NOTIFY argument also needs space for its name and typed value descriptors.
+/// Messages can share the entire receive allocation, including capacity for later frames.
+/// Copy individual values with [`TypedDataRef::into_owned`] when retaining them.
 ///
 /// `HAProxy` does the same thing with a tighter default: it starts a connection at
 /// `tune.bufsize - 4` and narrows to the negotiated value once AGENT-HELLO arrives (see
@@ -152,6 +149,11 @@ pub trait SpopFrame: std::fmt::Debug + Send {
     fn metadata(&self) -> Cow<'_, Metadata>;
     fn payload(&self) -> FramePayload<'_>;
 
+    /// Borrows the peer's handshake fields when this is a decoded HAPROXY-HELLO.
+    fn as_haproxy_hello(&self) -> Option<&frames::HaproxyHello> {
+        None
+    }
+
     /// Serializes the frame into a freshly allocated buffer.
     ///
     /// Prefer [`SpopFrame::serialize_into`] when a destination buffer already exists: it writes
@@ -227,28 +229,7 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
             // ACTION-SET-VAR  : <SET-VAR:1 byte><NB-ARGS:1 byte><VAR-SCOPE:1 byte><VAR-NAME><VAR-VALUE>
 
             for action in *actions {
-                match action {
-                    Action::SetVar { scope, name, value } => {
-                        // SET-VAR (1 byte), NB-ARGS = 3 (1 byte), VAR-SCOPE (1 byte)
-                        buf.extend_from_slice(&[0x01, 0x03, scope.to_u8()]);
-
-                        // Serialize variable name (length + bytes)
-                        varint::encode_varint_into(name.len() as u64, buf);
-                        buf.extend_from_slice(name.as_bytes());
-
-                        // Serialize variable value based on type
-                        value.to_bytes(buf);
-                    }
-
-                    Action::UnSetVar { scope, name } => {
-                        // UNSET-VAR (1 byte), NB-ARGS = 2 (1 byte), VAR-SCOPE (1 byte)
-                        buf.extend_from_slice(&[0x02, 0x02, scope.to_u8()]);
-
-                        // Serialize variable name (length + bytes)
-                        varint::encode_varint_into(name.len() as u64, buf);
-                        buf.extend_from_slice(name.as_bytes());
-                    }
-                }
+                action.encode_into(buf);
             }
         }
 
@@ -280,17 +261,9 @@ fn encode_payload(payload: &FramePayload, buf: &mut Vec<u8>) -> std::io::Result<
 
 fn payload_serialized_len(payload: &FramePayload) -> std::io::Result<usize> {
     match payload {
-        FramePayload::ListOfActions(actions) => Ok(actions
-            .iter()
-            .map(|action| match action {
-                Action::SetVar { name, value, .. } => {
-                    3 + varint::varint_len(name.len() as u64) + name.len() + value.serialized_len()
-                }
-                Action::UnSetVar { name, .. } => {
-                    3 + varint::varint_len(name.len() as u64) + name.len()
-                }
-            })
-            .sum()),
+        FramePayload::ListOfActions(actions) => {
+            Ok(actions.iter().map(Action::serialized_len).sum())
+        }
         FramePayload::KVList(kv_pairs) => Ok(kv_pairs
             .iter()
             .map(|(key, value)| {

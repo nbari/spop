@@ -4,23 +4,51 @@ Changelog
 ## Unreleased
 
 ### Changed
-- Decode NOTIFY messages without copying their names and values. `SpopCodec` splits each frame
-  off its read buffer, and a `Message` keeps that frame and points into it, so decoding no longer
-  allocates per argument: 4 allocations instead of 27 for a 15-argument frame
-  (`tests/decode_allocations.rs`), and about 26% (3 arguments) to 39% (15 arguments) fewer CPU
-  cycles per decoded frame. `parse_frame` copies the frame body once. A message keeps its frame
-  alive while it exists
+
+- Decode NOTIFY names and binary or valid UTF-8 values from shared storage, contributed by
+  phihos in [#15](https://github.com/nbari/spop/pull/15). A message can keep the entire socket
+  read allocation alive. Copy individual values with `TypedDataRef::into_owned()` for long-term
+  storage. Invalid UTF-8 still receives replacement characters.
+- Validate framing before consuming the input. HELLO and DISCONNECT parse from borrowed bytes.
+  Rejecting a frame preserves subsequent buffered data in place and preserves parser error
+  positions. Length checks also work when the body plus prefix exceeds the 32-bit address range.
+- Size a single-message list for one entry. On x86-64 this saves 240 requested bytes for a
+  typical NOTIFY. Multi-message lists still grow as needed.
 
 ### Added
-- `TypedDataRef`, a `TypedData` that borrows its STRING or BINARY payload. `TypedData::from`
-  and `TypedDataRef::into_owned` copy it
-- `Message::new`, `Message::name`, `Message::args` (an iterator of `(&str, TypedDataRef)` in
-  declaration order) and the `frame::Args` iterator type
+
+- `SpopFrame::as_haproxy_hello()` borrows the parsed HELLO for negotiation.
+  `Ack::set_var_static` accepts a static name and `TypedDataRef<'static>` for replies.
+- `Message::new` constructs a message for handler tests. `Message::args()` returns an
+  ordered iterator. Both owned and borrowed typed values support conversion through `From`.
 
 ### Breaking
-- `Message::name` and `Message::args` are methods instead of public fields, and `Message::get`
-  returns `Option<TypedDataRef<'_>>` instead of `Option<&TypedData>`. Match on
-  `TypedDataRef::String(s)` where you matched `TypedData::String(s)`; `s` is a `&str`
+
+- Migrate `message.name` and `message.args` to `message.name()` and `message.args()`.
+  `message.get(name)` returns `Option<TypedDataRef<'_>>`. Match `TypedDataRef::String(s)`
+  for a borrowed `&str`.
+- Exhaustive matches on `Action` must also handle `SetVarStatic`.
+
+### Measurements
+
+A 15-argument mixed NOTIFY carried two or ten binary request headers. Timings are medians of
+seven alternating optimized runs of 150,000 iterations on one pinned x86-64 core with Rust
+1.100.0 and one dependency graph. NOTIFY timings include reading every argument and dropping
+the frame. Instruction counts cover the decoder alone over 100 frames in Callgrind.
+
+| Per frame or operation | 0.13.1 | Merged #15 | Follow-up |
+| --- | ---: | ---: | ---: |
+| NOTIFY elapsed ns, two / ten headers | 861 / 868 | 617 / 614 | 588 / 600 |
+| Decoder instructions, two / ten headers | 10,330 / 10,348 | 7,012 / 7,056 | 6,829 / 6,873 |
+| NOTIFY allocation calls, warmed buffer | 27 | 3 | 3 |
+| NOTIFY bytes requested, two / ten headers, warmed buffer | 1,335 / 1,481 | 1,208 / 1,208 | 968 / 968 |
+| Two-action ACK build and encode, ns / allocation calls | 91 / 5 | 91 / 5 | 80 / 2 |
+| Parsed HELLO negotiation, regular / health check, ns | 516 / 488 | 511 / 488 | 16 / 16 |
+| Parsed HELLO negotiation allocations, regular / health check | 15 / 12 | 15 / 12 | 0 / 0 |
+
+Run `cargo bench --bench roundtrip` for the mixed codec, ACK and HELLO benchmarks.
+`cargo test --test decode_allocations` also checks a fresh receive buffer, which can cost one
+additional allocation to establish shared ownership.
 
 ## 0.13.1 - 2026-10-02
 

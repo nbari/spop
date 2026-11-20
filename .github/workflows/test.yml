@@ -109,3 +109,32 @@ jobs:
           CONTAINER_ENGINE: docker
           HAPROXY_VERSION: ${{ matrix.haproxy }}
         run: bash scripts/integration.sh
+
+  test32:
+    name: Test 32-bit Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-musl
+      - name: Install the C compiler for musl build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Run 32-bit tests
+        run: |
+          export CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_LINKER="$(dirname "$(rustc --print target-libdir)")/bin/rust-lld"
+          cargo test --target i686-unknown-linux-musl --lib --tests
+          cargo test --release --target i686-unknown-linux-musl --lib --tests
+
+  passed:
+    name: CI passed
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [format, lint, check, docs, test, test32, integration]
+    steps:
+      - name: Verify every prerequisite succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"

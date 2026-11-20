@@ -4,7 +4,7 @@ use spop::{
     MAX_FRAME_SIZE_LIMIT, SpopCodec, SpopFrame, StatusCode,
     actions::VarScope,
     frame::{FramePayload, FrameType},
-    frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities, HaproxyHello},
+    frames::{Ack, AgentDisconnect, AgentHello, FrameCapabilities},
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
@@ -69,8 +69,9 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
         match frame.frame_type() {
             // Respond with AgentHello frame
             FrameType::HaproxyHello => {
-                let hello = HaproxyHello::try_from(frame.payload())
-                    .map_err(|_| anyhow::anyhow!("Failed to parse HaproxyHello"))?;
+                let hello = frame
+                    .as_haproxy_hello()
+                    .ok_or_else(|| anyhow::anyhow!("Missing parsed HELLO"))?;
 
                 let is_healthcheck = hello.healthcheck.unwrap_or(false);
 
@@ -100,7 +101,7 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                     capabilities: vec![FrameCapabilities::Pipelining],
                 };
 
-                println!("Sending AgentHello: {:#?}", agent_hello.payload());
+                println!("Sending AgentHello: {agent_hello:#?}");
 
                 match socket.send(Box::new(agent_hello)).await {
                     Ok(()) => println!("Frame sent successfully"),
@@ -131,11 +132,19 @@ async fn handle_connection(u_stream: TcpStream) -> Result<()> {
                         match message.name() {
                             "check-client-ip" => {
                                 let random_value: u32 = rand::random_range(0..100);
-                                ack = ack.set_var(VarScope::Session, "ip_score", random_value);
+                                ack = ack.set_var_static(
+                                    VarScope::Session,
+                                    "ip_score",
+                                    spop::TypedDataRef::UInt32(random_value),
+                                );
                             }
 
                             "log-request" => {
-                                ack = ack.set_var(VarScope::Transaction, "my_var", "tequila");
+                                ack = ack.set_var_static(
+                                    VarScope::Transaction,
+                                    "my_var",
+                                    spop::TypedDataRef::String("tequila"),
+                                );
                             }
 
                             _ => {

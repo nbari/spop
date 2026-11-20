@@ -151,13 +151,20 @@ fn handle(message: &Message) {
     }
 
     // Values borrow from the frame they arrived in; copy one out to keep it longer.
-    let path: Option<TypedData> = message.get("path").map(TypedData::from);
+    let path: Option<TypedData> = message.get("path").map(TypedDataRef::into_owned);
     println!("path: {path:?}");
 }
 ```
 
-Names and values are not copied out of the frame: they point into it, and the message keeps the
-frame alive until it is dropped.
+In the 0.14 API, use `message.name()` and `message.args()` for the former public fields.
+Text and binary values borrow from the message. Retaining a message can keep an entire socket
+read allocation alive, including space for other frames. Use `into_owned()` for a value that
+will go into a cache or queue.
+
+In a connection handler, `frame.as_haproxy_hello()` borrows the parsed handshake for version and
+frame-size negotiation. For ACKs with a literal variable name and a scalar or static payload,
+`ack.set_var_static(VarScope::Transaction, "my_var", TypedDataRef::String("tequila"))` avoids
+allocating either string. Use `set_var` for dynamically constructed values.
 
 ## Example
 

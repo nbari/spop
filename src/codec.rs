@@ -1,5 +1,8 @@
-use crate::{MAX_FRAME_SIZE_LIMIT, SpopFrame, parser::parse_frame_body};
-use bytes::{BufMut, BytesMut};
+use crate::{
+    MAX_FRAME_SIZE_LIMIT, SpopFrame,
+    parser::{ParsedFrame, parse_packet},
+};
+use bytes::{Buf, BufMut, BytesMut};
 use nom::error::ErrorKind;
 use std::cell::RefCell;
 use std::io;
@@ -75,61 +78,27 @@ impl Decoder for SpopCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // <FRAME-LENGTH:4 bytes> <FRAME>, checked in the same order as
-        // `parser::parse_frame_with_limit` does.
-        let Some(prefix) = src.first_chunk::<4>() else {
-            return Ok(None);
-        };
-        let frame_length = u32::from_be_bytes(*prefix);
-
-        // The peer is untrusted and can claim up to ~4 GiB; see `parse_frame_with_limit`.
-        if frame_length > self.max_frame_size {
-            return Err(frame_error(ErrorKind::TooLarge, 4));
-        }
-
-        let frame_end = 4 + frame_length as usize;
-        if src.len() < frame_end {
-            return Ok(None);
-        }
-
-        // Take the frame out of the read buffer without copying it. Every name and value decoded
-        // from it is a slice of it, so they cost no allocation of their own and stay valid
-        // however `src` is refilled.
-        let frame = src.split_to(frame_end).freeze();
-
-        match parse_frame_body(frame.get(4..).unwrap_or_default(), &frame) {
-            Ok((_, parsed)) => Ok(Some(parsed)),
-
-            Err(e) => {
-                // Never format the nom error itself. Its `input` is a slice of the frame, and
-                // `{e:?}` prints it byte by byte as decimal: an invalid frame of up to
-                // `max_frame_size` (1 MiB before the handshake) turned into an error message
-                // several times that size, which agents then log. The kind and where it
-                // happened are what is useful. Errors point into the body, a slice of `frame`,
-                // so the offset from the frame's start counts the length prefix too.
-                let error = match e {
-                    nom::Err::Error(e) | nom::Err::Failure(e) => frame_error(
-                        e.code,
-                        e.input
-                            .as_ptr()
-                            .addr()
-                            .saturating_sub(frame.as_ptr().addr()),
-                    ),
-                    // The body is complete and parsed with `complete` parsers, so this cannot
-                    // happen; reporting it beats waiting for bytes the frame does not have.
-                    nom::Err::Incomplete(_) => frame_error(ErrorKind::Eof, frame_end),
-                };
-
-                // Leave the read buffer as it was: the frame stays unconsumed on errors.
-                // Copying is fine on this path.
-                let mut restored = BytesMut::with_capacity(frame.len() + src.len());
-                restored.extend_from_slice(&frame);
-                restored.extend_from_slice(src);
-                *src = restored;
-
-                Err(error)
+        let (remaining, parsed) = match parse_packet(src, self.max_frame_size) {
+            Ok(packet) => packet,
+            Err(nom::Err::Incomplete(_)) => return Ok(None),
+            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
+                let offset = e.input.as_ptr().addr() - src.as_ptr().addr();
+                return Err(frame_error(e.code, offset));
             }
-        }
+        };
+        let consumed = src.len() - remaining.len();
+        let frame = match parsed {
+            ParsedFrame::Control(frame) => {
+                src.advance(consumed);
+                frame
+            }
+            ParsedFrame::Notify(frame) => {
+                let mut body = src.split_to(consumed);
+                body.advance(4);
+                frame.with_buffer(body.freeze())
+            }
+        };
+        Ok(Some(frame))
     }
 }
 

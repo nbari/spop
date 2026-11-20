@@ -276,6 +276,26 @@ pub enum TypedDataRef<'a> {
 }
 
 impl TypedDataRef<'_> {
+    pub(crate) fn to_bytes(self, buf: &mut Vec<u8>) {
+        let (kind, bytes) = match self {
+            Self::String(s) => (TYPE_STRING, s.as_bytes()),
+            Self::Binary(b) => (TYPE_BINARY, b),
+            scalar => return scalar.into_owned().to_bytes(buf),
+        };
+        buf.push(kind);
+        encode_varint_into(bytes.len() as u64, buf);
+        buf.extend_from_slice(bytes);
+    }
+
+    pub(crate) fn serialized_len(self) -> usize {
+        let len = match self {
+            Self::String(s) => s.len(),
+            Self::Binary(b) => b.len(),
+            scalar => return scalar.into_owned().serialized_len(),
+        };
+        1 + varint_len(len as u64) + len
+    }
+
     /// Copies the payload into an owned [`TypedData`].
     #[must_use]
     pub fn into_owned(self) -> TypedData {
@@ -495,6 +515,36 @@ mod tests {
                 TypedData::Binary(vec![0xAA, 0xBB, 0xCC]),
             ),
         ]
+    }
+
+    #[test]
+    fn message_values_round_trip_through_borrowed_and_owned_forms() {
+        use crate::{FramePayload, frame::Message, parser::parse_frame};
+        for (_, wire_value, owned) in test_cases() {
+            let msg = Message::new("é", [("", owned.clone())]);
+            let borrowed = TypedDataRef::from(&owned);
+            assert_eq!(msg.get(""), Some(borrowed));
+            let mut encoded = Vec::new();
+            borrowed.to_bytes(&mut encoded);
+            assert_eq!(borrowed.serialized_len(), encoded.len());
+            assert_eq!(encoded, wire_value);
+            let mut body = vec![3, 0, 0, 0, 1, 1, 1, 2, 0xc3, 0xa9, 1, 0];
+            body.extend(wire_value);
+            let mut wire = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+            wire.extend(body);
+            let (_, frame) = parse_frame(&wire).unwrap();
+            let FramePayload::ListOfMessages(msgs) = frame.payload() else {
+                panic!("expected NOTIFY")
+            };
+            let msg = msgs.first().unwrap();
+            assert_eq!(msg.name(), "é");
+            let value = msg.get("").unwrap();
+            assert_eq!(value, borrowed);
+            let copy = TypedData::from(value);
+            drop(frame);
+            drop(wire);
+            assert_eq!(copy, owned);
+        }
     }
 
     #[test]

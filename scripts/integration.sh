@@ -115,7 +115,7 @@ wait_for "agent_args to listen" grep -q 'listening on port' "$logs/agent_args.lo
 # `all=` lists every argument in the order received, so a reordered, dropped or altered
 # argument fails even where the lookups cannot see it.
 expected_args='x-spoe-args: answer=42 country=xx lossy=lossy unnamed=first,127.0.0.1,second'
-expected_args+=' all=answer:42,:first,:127.0.0.1,country:xx,country:shadowed,:second,bad\u{fffd}:lossy'
+expected_args+=' all=answer:42,:first,:127.0.0.1,country:xx,country:shadowed,:second,bad\u{fffd}:lossy,headers:xx'
 
 # Strips the CRs from header lines and lowercases the header names, leaving values untouched:
 # names are case-insensitive (HAProxy sends them in lowercase), values must match exactly.
