@@ -6,6 +6,8 @@
 
 Library for parsing HAProxy SPOP protocol messages.
 
+Add the 0.14 series to your project with `cargo add spop@0.14`.
+
 The protocol is described here: https://github.com/haproxy/haproxy/blob/master/doc/SPOE.txt
 
 ## Development
@@ -32,9 +34,9 @@ This repository includes three runnable agents:
 
 - `agent_tcp`: listens on `0.0.0.0:12345`
 - `agent_socket`: listens on `spoa_agent/spoa.sock`
-- `agent_args`: listens on `127.0.0.1:12346` and reads its message arguments back: unnamed
-  arguments by position, a repeated name through `Message::get`, and a name that is not valid
-  UTF-8. Start here to see how to read what HAProxy sends
+- `agent_args` listens on `127.0.0.1:12346`. It reads unnamed and repeated arguments,
+  handles invalid UTF-8 in argument names, and extracts the country header from HAProxy's
+  binary request headers (`req.hdrs_bin`).
 
 Run one of them directly with Cargo:
 
@@ -166,7 +168,10 @@ frame-size negotiation. For ACKs with a literal variable name and a scalar or st
 `ack.set_var_static(VarScope::Transaction, "my_var", TypedDataRef::String("tequila"))` avoids
 allocating either string. Use `set_var` for dynamically constructed values.
 
-## Example
+## Example configuration for the TCP and Unix socket agents
+
+The complete three-agent example, including `agent_args`, is in
+[haproxy.cfg](haproxy.cfg) and [spoe-test.conf](spoe-test.conf).
 
 ```conf
 global

@@ -1,12 +1,12 @@
 Changelog
 =========
 
-## Unreleased
+## 0.14.0 - 2026-11-20
 
 ### Changed
 
-- Decode NOTIFY names and binary or valid UTF-8 values from shared storage, contributed by
-  phihos in [#15](https://github.com/nbari/spop/pull/15). A message can keep the entire socket
+- Decode NOTIFY names and binary or valid UTF-8 values from shared storage, contributed by @phihos
+  in [#15](https://github.com/nbari/spop/pull/15). A message can keep the entire socket
   read allocation alive. Copy individual values with `TypedDataRef::into_owned()` for long-term
   storage. Invalid UTF-8 still receives replacement characters.
 - Validate framing before consuming the input. HELLO and DISCONNECT parse from borrowed bytes.
@@ -36,7 +36,7 @@ seven alternating optimized runs of 150,000 iterations on one pinned x86-64 core
 1.100.0 and one dependency graph. NOTIFY timings include reading every argument and dropping
 the frame. Instruction counts cover the decoder alone over 100 frames in Callgrind.
 
-| Per frame or operation | 0.13.1 | Merged #15 | Follow-up |
+| Per frame or operation | 0.13.1 | Merged #15 | 0.14.0 |
 | --- | ---: | ---: | ---: |
 | NOTIFY elapsed ns, two / ten headers | 861 / 868 | 617 / 614 | 588 / 600 |
 | Decoder instructions, two / ten headers | 10,330 / 10,348 | 7,012 / 7,056 | 6,829 / 6,873 |
@@ -45,6 +45,10 @@ the frame. Instruction counts cover the decoder alone over 100 frames in Callgri
 | Two-action ACK build and encode, ns / allocation calls | 91 / 5 | 91 / 5 | 80 / 2 |
 | Parsed HELLO negotiation, regular / health check, ns | 516 / 488 | 511 / 488 | 16 / 16 |
 | Parsed HELLO negotiation allocations, regular / health check | 15 / 12 | 15 / 12 | 0 / 0 |
+
+The 0.14.0 ACK column uses `Ack::set_var_static` for both actions, and the HELLO
+column uses `SpopFrame::as_haproxy_hello()`. The earlier columns use `Ack::set_var`
+and rebuild the HELLO from `frame.payload()`.
 
 Run `cargo bench --bench roundtrip` for the mixed codec, ACK and HELLO benchmarks.
 `cargo test --test decode_allocations` also checks a fresh receive buffer, which can cost one

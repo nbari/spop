@@ -53,6 +53,8 @@ use std::borrow::Cow;
 /// [`crate::SpopCodec::set_max_frame_size`] applies it.
 ///
 /// Each decoded NOTIFY argument also needs space for its name and typed value descriptors.
+/// On x86-64, decoding a 1 MiB frame with many small arguments can request about 28 MiB
+/// of heap allocations. Applying the negotiated frame limit bounds this cost per frame.
 /// Messages can share the entire receive allocation, including capacity for later frames.
 /// Copy individual values with [`TypedDataRef::into_owned`] when retaining them.
 ///

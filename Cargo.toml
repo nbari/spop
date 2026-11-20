@@ -1,6 +1,6 @@
 [package]
 name = "spop"
-version = "0.13.1"
+version = "0.14.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Library for parsing HAProxy SPOP (Stream Processing Offload Protocol)"
 documentation = "https://docs.rs/spop/latest/spop/"
@@ -56,7 +56,7 @@ anyhow = "1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 futures = "0.3"
 rand = "0.10"
-tokio = { version = "1.53", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 
 [lib]
 name = "spop"

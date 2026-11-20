@@ -46,6 +46,21 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
+      - name: Verify PR commit signatures
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          unverified=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA?per_page=100" \
+            --jq '.commits[] | select(.commit.verification.verified != true) | "\(.sha) \(.commit.verification.reason)"')
+          if [[ -n "$unverified" ]]; then
+            echo "GitHub could not verify these PR commits:"
+            echo "$unverified"
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
